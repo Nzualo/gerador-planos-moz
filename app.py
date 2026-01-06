@@ -2,8 +2,8 @@ import streamlit as st
 import google.generativeai as genai
 from fpdf import FPDF
 
-# Configuração da Página
-st.set_page_config(page_title="SDEJT Planos", page_icon="🇲🇿")
+# Configuração
+st.set_page_config(page_title="SDEJT Inhassoro", page_icon="🇲🇿")
 
 # --- FUNÇÃO DO PDF ---
 class PDF(FPDF):
@@ -32,16 +32,22 @@ def create_pdf(texto, disciplina, classe, tema):
     pdf.cell(0, 8, f"Tema: {tema}", 0, 1)
     pdf.ln(5)
     pdf.set_font("Arial", size=11)
-    # Correção de caracteres para PDF
     texto_limpo = texto.replace("*", "").encode('latin-1', 'ignore').decode('latin-1')
     pdf.multi_cell(0, 6, texto_limpo)
     return pdf.output(dest='S').encode('latin-1', 'ignore')
 
 # --- O SITE ---
-st.title("🇲🇿 SDEJT - Gerador Oficial")
+st.title("🇲🇿 Gerador Oficial SDEJT")
 
 with st.sidebar:
     api_key = st.text_input("Cole sua API Key aqui:", type="password")
+    # Botão de diagnóstico
+    if api_key:
+        try:
+            genai.configure(api_key=api_key)
+            st.success("Chave Conectada!")
+        except:
+            st.error("Chave Inválida")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -53,21 +59,31 @@ with col2:
 
 if st.button("Gerar Documento PDF", type="primary"):
     if not api_key:
-        st.error("Falta a chave API na barra lateral!")
+        st.error("Insira a chave na barra lateral!")
     else:
-        with st.spinner('A conectar ao servidor do Google...'):
+        with st.spinner('A conectar ao servidor...'):
             try:
                 genai.configure(api_key=api_key)
-                # AQUI ESTÁ A MUDANÇA IMPORTANTE:
-                model = genai.GenerativeModel('gemini-1.5-flash')
                 
+                # --- AUTO-DETECÇÃO DE MODELO ---
+                # Tenta o modelo mais novo, se falhar, tenta o antigo
+                try:
+                    model = genai.GenerativeModel('gemini-1.5-flash')
+                    response_check = model.generate_content("Teste")
+                except:
+                    # Se o Flash falhar, usa o Pro antigo
+                    model = genai.GenerativeModel('gemini-pro')
+                
+                # Gera o conteúdo
                 prompt = f"Crie um plano de aula do SNE Moçambique. Disciplina: {disciplina}, Classe: {classe}, Tema: {tema}. Estruture com: 1.Objetivos, 2.Meios, 3.Funções Didáticas. Não use tabelas Markdown."
-                
                 resposta = model.generate_content(prompt)
+                
+                # Cria o PDF
                 pdf_bytes = create_pdf(resposta.text, disciplina, classe, tema)
                 
-                st.success("Sucesso! Baixe o seu plano:")
+                st.success("Sucesso! Plano gerado.")
                 st.download_button("📄 Baixar PDF Oficial", data=pdf_bytes, file_name="Plano_Aula.pdf", mime="application/pdf")
                 
             except Exception as e:
-                st.error(f"Erro: {e}")
+                st.error(f"Erro técnico: {e}")
+                st.info("Dica: Tente clicar em 'Reboot App' no menu do site.")
