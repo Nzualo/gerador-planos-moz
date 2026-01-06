@@ -22,7 +22,7 @@ class PDF(FPDF):
     def footer(self):
         self.set_y(-15)
         self.set_font('Arial', 'I', 8)
-        self.cell(0, 10, 'Gerado por IA (Gemini 3 Pro) - SDEJT Inhassoro', 0, 0, 'C')
+        self.cell(0, 10, 'Gerado por IA (Gemini 2.5) - SDEJT Inhassoro', 0, 0, 'C')
 
 def create_pdf(texto, disciplina, classe, tema):
     pdf = PDF()
@@ -45,7 +45,7 @@ def create_pdf(texto, disciplina, classe, tema):
 
 # --- O SITE ---
 st.title("🇲🇿 Gerador Oficial SDEJT")
-st.caption("Motor: Gemini 3.0 Pro (Última Geração)")
+st.write("Versão: Gemini 2.5 Flash (Rápido e Estável)")
 
 with st.sidebar:
     api_key = st.text_input("Cole sua API Key aqui:", type="password")
@@ -62,13 +62,13 @@ if st.button("Gerar Documento PDF", type="primary"):
     if not api_key:
         st.error("Insira a chave na barra lateral!")
     else:
-        with st.spinner('O Gemini 3 Pro está a pensar...'):
+        with st.spinner('A gerar plano com Gemini 2.5...'):
             try:
                 genai.configure(api_key=api_key)
                 
-                # --- AQUI ESTÁ A MUDANÇA ---
-                # Usamos o nome exato que estava na sua lista e no print
-                model = genai.GenerativeModel('models/gemini-3-pro-preview')
+                # --- SOLUÇÃO DO PROBLEMA ---
+                # Usamos o modelo 'Flash' que tem cota gratuita liberada
+                model = genai.GenerativeModel('models/gemini-2.5-flash')
                 
                 prompt = f"""
                 Aja como técnico pedagógico de Moçambique.
@@ -85,7 +85,7 @@ if st.button("Gerar Documento PDF", type="primary"):
                 
                 IMPORTANTE:
                 - Use linguagem formal pedagógica.
-                - NÃO use tabelas (use listas numeradas para o PDF ficar perfeito).
+                - NÃO use tabelas (use listas numeradas para o PDF funcionar).
                 """
                 
                 resposta = model.generate_content(prompt)
@@ -93,8 +93,8 @@ if st.button("Gerar Documento PDF", type="primary"):
                 # Criar o PDF
                 pdf_bytes = create_pdf(resposta.text, disciplina, classe, tema)
                 
-                st.success("Sucesso! Plano gerado com tecnologia de ponta.")
-                st.download_button("📄 Baixar PDF Oficial", data=pdf_bytes, file_name="Plano_SDEJT_Gemini3.pdf", mime="application/pdf")
+                st.success("Sucesso! Plano gerado.")
+                st.download_button("📄 Baixar PDF Oficial", data=pdf_bytes, file_name="Plano_SDEJT_2.5.pdf", mime="application/pdf")
                 
             except Exception as e:
                 st.error(f"Erro: {e}")
