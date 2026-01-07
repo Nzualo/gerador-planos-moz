@@ -43,14 +43,14 @@ def check_password():
 
 if not check_password(): st.stop()
 
-# --- CLASSE PDF (CABEÇALHO PARA PREENCHIMENTO MANUAL) ---
+# --- CLASSE PDF ---
 class PDF(FPDF):
     def header(self):
         self.set_font('Arial', 'B', 12); self.cell(0, 5, 'REPÚBLICA DE MOÇAMBIQUE', 0, 1, 'C')
         self.set_font('Arial', 'B', 10); self.cell(0, 5, 'GOVERNO DO DISTRITO DE INHASSORO', 0, 1, 'C')
         self.ln(5); self.set_font('Arial', 'B', 14); self.cell(0, 10, 'PLANO DE AULA', 0, 1, 'C'); self.ln(2)
     def footer(self):
-        self.set_y(-15); self.set_font('Arial', 'I', 6); self.cell(0, 10, 'SDEJT Inhassoro - Processado por Gemini 2.5 Pro', 0, 0, 'C')
+        self.set_y(-15); self.set_font('Arial', 'I', 6); self.cell(0, 10, 'SDEJT Inhassoro - Processado por IA', 0, 0, 'C')
     def clean_text(self, text):
         return str(text).encode('latin-1', 'replace').decode('latin-1')
     def draw_table_header(self, widths):
@@ -76,7 +76,6 @@ class PDF(FPDF):
 def create_pdf(inputs, dados, obj_geral, obj_especificos):
     pdf = PDF(); pdf.set_auto_page_break(auto=False); pdf.add_page()
     pdf.set_font("Arial", size=10)
-    # Cabeçalho limpo para o professor preencher
     pdf.cell(130, 7, f"Escola: __________________________________________________", 0, 0)
     pdf.cell(0, 7, f"Data: ____/____/2026", 0, 1)
     pdf.cell(0, 7, f"Unidade Temática: {pdf.clean_text(inputs['unidade'])}", 0, 1)
@@ -89,7 +88,6 @@ def create_pdf(inputs, dados, obj_geral, obj_especificos):
     pdf.cell(0, 7, f"Nº Alunos: M_____  F_____  Total:_____", 0, 1)
     pdf.line(10, pdf.get_y()+2, 200, pdf.get_y()+2); pdf.ln(5)
     
-    # Conteúdo Pedagógico
     pdf.set_font("Arial", "B", 10); pdf.cell(40, 6, "OBJETIVO GERAL:", 0, 0)
     pdf.set_font("Arial", size=10); pdf.set_xy(50, pdf.get_y()); pdf.multi_cell(0, 6, pdf.clean_text(obj_geral)); pdf.ln(2)
     pdf.set_font("Arial", "B", 9); pdf.cell(0, 6, "OBJECTIVOS ESPECÍFICOS:", 0, 1)
@@ -99,29 +97,30 @@ def create_pdf(inputs, dados, obj_geral, obj_especificos):
     for row in dados: pdf.table_row(row, widths)
     return pdf.output(dest='S').encode('latin-1', 'replace')
 
-# --- LÓGICA DE GERAÇÃO COM GEMINI 2.5 PRO ---
+# --- LÓGICA DE GERAÇÃO ---
 def gerar_plano(instrucoes_arquivo="", instrucoes_ajuste="", arquivo=None):
-    progress_bar = st.progress(0)
-    status_text = st.empty()
+    progress_bar = st.progress(0); status_text = st.empty()
     try:
-        status_text.text("Ativando Gemini 2.5 Pro...")
-        progress_bar.progress(15)
+        status_text.text("Conectando ao Gemini 2.5 Flash..."); progress_bar.progress(10)
         genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+        model = genai.GenerativeModel('gemini-2.5-flash')
         
-        # MODELO GEMINI 2.5 PRO
-        model = genai.GenerativeModel('gemini-2.5-pro')
-        
-        prompt = f"""Aja como Pedagogo Especialista. Gere um plano de aula para Moçambique.
-        Disciplina: {st.session_state['tmp_disciplina']}, Tema: {st.session_state['tmp_tema']}, Classe: {st.session_state['tmp_classe']}, Duração: {st.session_state['tmp_duracao']}.
+        prompt = f"""Aja como Pedagogo do SNE Moçambique. Gere um plano técnico.
+        Disciplina: {st.session_state['tmp_disciplina']}, Tema: {st.session_state['tmp_tema']}, Classe: {st.session_state['tmp_classe']}.
+        Duração: {st.session_state['tmp_duracao']}.
         COMANDO ARQUIVO: {instrucoes_arquivo}
         COMANDO AJUSTE: {instrucoes_ajuste}
         
-        REGRAS DE OURO:
-        1. NÃO gere cabeçalhos com nomes de escolas ou professores fictícios.
-        2. A saída deve ser rigorosamente dividida nestes blocos:
-        [BLOCO_GERAL]...[FIM_GERAL]
-        [BLOCO_ESPECIFICOS]...[FIM_ESPECIFICOS]
-        [BLOCO_TABELA] (Use 6 colunas separadas por ||) [FIM_TABELA]
+        REGRAS PEDAGÓGICAS:
+        1. NÃO inclua "Identificação", "Escola" ou nomes de campos no corpo do texto. 
+        2. FOQUE estritamente no Objetivo Geral (verbo no infinitivo), Objetivos Específicos e Tabela.
+        3. A tabela DEVE ter 6 colunas rigorosamente separadas por ||.
+        4. Detalhe as atividades do professor e aluno.
+        
+        SAÍDA:
+        [BLOCO_GERAL] (Frase curta) [FIM_GERAL]
+        [BLOCO_ESPECIFICOS] (Lista com verbos no infinitivo) [FIM_ESPECIFICOS]
+        [BLOCO_TABELA] (Linhas com ||) [FIM_TABELA]
         """
 
         conteudo = [prompt]
@@ -129,12 +128,10 @@ def gerar_plano(instrucoes_arquivo="", instrucoes_ajuste="", arquivo=None):
             if arquivo.type in ['image/png', 'image/jpeg']: conteudo.append(Image.open(arquivo))
             else: conteudo.append({"mime_type": "application/pdf", "data": arquivo.getvalue()})
 
-        progress_bar.progress(50)
-        status_text.text("Gemini 2.5 Pro a processar tabelas e didática...")
+        progress_bar.progress(50); status_text.text("Analisando materiais e estruturando atividades...")
         response = model.generate_content(conteudo)
         
-        progress_bar.progress(90)
-        texto = response.text
+        progress_bar.progress(90); texto = response.text
         
         st.session_state['obj_geral'] = texto.split("[BLOCO_GERAL]")[1].split("[FIM_GERAL]")[0].strip() if "[BLOCO_GERAL]" in texto else ""
         st.session_state['obj_especificos'] = texto.split("[BLOCO_ESPECIFICOS]")[1].split("[FIM_ESPECIFICOS]")[0].strip() if "[BLOCO_ESPECIFICOS]" in texto else ""
@@ -148,15 +145,15 @@ def gerar_plano(instrucoes_arquivo="", instrucoes_ajuste="", arquivo=None):
                     while len(cols) < 6: cols.append("-")
                     dados.append(cols[:6])
         
-        st.session_state['dados_pdf'] = dados
-        st.session_state['plano_pronto'] = True
+        st.session_state['dados_pdf'] = dados; st.session_state['plano_pronto'] = True
         progress_bar.progress(100); time.sleep(1); status_text.empty(); progress_bar.empty()
     except Exception as e:
         progress_bar.empty(); status_text.empty()
-        st.error(f"Erro no Gemini 2.5 Pro: {e}")
+        if "429" in str(e): st.error("⚠️ Limite de cota atingido (Erro 429). Aguarde 30 segundos.")
+        else: st.error(f"Erro: {e}")
 
-# --- INTERFACE PRINCIPAL ---
-st.title("🇲🇿 Elaboração de Planos (Gemini 2.5 Pro)")
+# --- INTERFACE ---
+st.title("🇲🇿 Elaboração de Planos de Aulas")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -168,11 +165,11 @@ with col2:
     st.text_input("Tema da Aula", key='tmp_tema')
     st.selectbox("Tipo de Aula", ["Introdução de Matéria Nova", "Consolidação", "Revisão"], key='tmp_tipo_aula')
 
-st.markdown("### 📚 Material de Apoio")
+st.markdown("### 📚 Material de Apoio (Opcional)")
 arquivo_enviado = st.file_uploader("Carregar PDF ou Foto do Livro", type=['pdf', 'png', 'jpg', 'jpeg'])
-comando_ia_arquivo = st.text_input("🤖 Comando para a IA sobre o ficheiro", placeholder="Instruções para o material carregado...")
+comando_ia_arquivo = st.text_input("🤖 Comando para a IA sobre o ficheiro", placeholder="Ex: Use o texto da pág 10 para as atividades...")
 
-if st.button("🚀 Gerar Plano de Aula", type="primary", use_container_width=True):
+if st.button("🚀 Gerar Plano Completo", type="primary", use_container_width=True):
     gerar_plano(instrucoes_arquivo=comando_ia_arquivo, arquivo=arquivo_enviado)
 
 if st.session_state.get('plano_pronto'):
@@ -182,13 +179,13 @@ if st.session_state.get('plano_pronto'):
         df = pd.DataFrame(st.session_state['dados_pdf'], columns=["Tempo", "F. Didática", "Prof", "Aluno", "Métodos", "Meios"])
         st.dataframe(df, hide_index=True, use_container_width=True)
 
-    # BOTÃO DE DOWNLOAD
     inputs = {'unidade': st.session_state.get('tmp_unidade',''), 'tema': st.session_state.get('tmp_tema',''), 'turma': 'A', 'duracao': st.session_state.get('tmp_duracao',''), 'tipo_aula': st.session_state.get('tmp_tipo_aula',''), 'disciplina': st.session_state.get('tmp_disciplina','')}
     pdf_bytes = create_pdf(inputs, st.session_state['dados_pdf'], st.session_state['obj_geral'], st.session_state['obj_especificos'])
-    st.download_button(label="📄 Baixar PDF Final", data=pdf_bytes, file_name="Plano_SDEJT_2.5Pro.pdf", mime="application/pdf", type="primary", use_container_width=True)
+    
+    st.download_button(label="📄 Baixar PDF Final", data=pdf_bytes, file_name="Plano_Aula.pdf", mime="application/pdf", type="primary", use_container_width=True)
 
     st.markdown("### 🛠️ Ajustar ou Melhorar")
-    ajuste_texto = st.text_area("O que deseja mudar no plano?")
+    ajuste_texto = st.text_area("O que deseja mudar no plano gerado?")
     col_aj1, col_aj2 = st.columns(2)
     with col_aj1:
         if st.button("🔄 Aplicar Ajustes", use_container_width=True):
