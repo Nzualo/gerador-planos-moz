@@ -4,10 +4,10 @@ from fpdf import FPDF
 import pandas as pd
 import time
 
-# --- 1. CONFIGURAÇÃO ---
+# --- 1. CONFIGURAÇÃO (OBRIGATÓRIA) ---
 st.set_page_config(page_title="SDEJT Planos", page_icon="🇲🇿", layout="wide")
 
-# --- 2. ESTILO VISUAL (Dark Mode SNE) ---
+# --- 2. ESTILO VISUAL (DARK MODE CORRIGIDO) ---
 st.markdown("""
     <style>
     /* Fundo Escuro */
@@ -16,18 +16,20 @@ st.markdown("""
         color: #E0E0E0;
     }
     
-    /* Inputs Brancos/Legíveis */
+    /* Caixas de Texto Legíveis */
     .stTextInput > div > div > input {
         color: #FFFFFF !important;
         background-color: #262730 !important;
         border: 1px solid #4CAF50;
     }
+    
+    /* Selectbox */
     .stSelectbox > div > div > div {
         color: #FFFFFF !important;
         background-color: #262730 !important;
     }
     
-    /* Botões */
+    /* Botões Verdes */
     div.stButton > button {
         background-color: #4CAF50;
         color: white;
@@ -40,8 +42,8 @@ st.markdown("""
         border-radius: 6px;
     }
     
-    /* Títulos sem SNE */
-    h1, h2, h3 {
+    /* Fontes Oficiais */
+    h1, h2, h3, h4 {
         font-family: 'Times New Roman', serif;
         color: #4CAF50 !important;
     }
@@ -83,10 +85,30 @@ if not check_password():
 
 # --- 4. BARRA LATERAL ---
 with st.sidebar:
-    st.success(f"👤 Professor: {st.session_state.get('user_name', '')}")
+    st.success(f"👤 Docente: {st.session_state.get('user_name', '')}")
     if st.button("Sair"):
         st.session_state["password_correct"] = False
         st.rerun()
 
-# --- 5. CLASSE PDF (A4 HORIZONTAL + TIMES + 4 FUNÇÕES) ---
+# --- 5. CLASSE PDF (INDENTAÇÃO CORRIGIDA) ---
 class PDF(FPDF):
+    def header(self):
+        self.set_font('Times', 'B', 12)
+        self.cell(0, 5, 'REPÚBLICA DE MOÇAMBIQUE', 0, 1, 'C')
+        self.set_font('Times', 'B', 11)
+        self.cell(0, 5, 'MINISTÉRIO DA EDUCAÇÃO E DESENVOLVIMENTO HUMANO', 0, 1, 'C')
+        self.cell(0, 5, 'SDEJT - DISTRITO DE INHASSORO', 0, 1, 'C')
+        self.ln(5)
+        self.set_font('Times', 'B', 14)
+        self.cell(0, 10, 'PLANO DE LIÇÃO', 0, 1, 'C')
+        self.ln(2)
+
+    def footer(self):
+        self.set_y(-15)
+        self.set_font('Times', 'I', 8)
+        self.cell(0, 10, 'SDEJT Inhassoro - Processado por IA', 0, 0, 'C')
+
+    def table_row(self, data, widths):
+        max_lines = 1
+        for i, text in enumerate(data):
+            self.set_font("Times", size=10)
