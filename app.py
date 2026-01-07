@@ -125,7 +125,7 @@ class PDF(FPDF):
             x_curr += w
         self.set_y(y_start + height)
 
-def create_pdf(inputs, dados, objetivos):
+def create_pdf(inputs, dados, objetivos, objetivo_geral):
     pdf = PDF()
     pdf.set_auto_page_break(auto=False)
     pdf.add_page()
@@ -148,6 +148,12 @@ def create_pdf(inputs, dados, objetivos):
     pdf.line(10, pdf.get_y()+2, 200, pdf.get_y()+2)
     pdf.ln(5)
 
+    pdf.set_font("Arial", "B", 9)
+    pdf.cell(0, 6, "OBJECTIVO GERAL:", 0, 1)
+    pdf.set_font("Arial", size=9)
+    pdf.multi_cell(0, 5, objetivo_geral)
+    pdf.ln(2)
+    
     pdf.set_font("Arial", "B", 9)
     pdf.cell(0, 6, "OBJECTIVOS ESPECÍFICOS:", 0, 1)
     pdf.set_font("Arial", size=9)
@@ -204,6 +210,13 @@ st.markdown("""
         margin-bottom: 20px;
         border-radius: 5px;
     }
+    .warning-box {
+        background-color: #fff3cd;
+        border-left: 6px solid #ffc107;
+        padding: 15px;
+        margin-bottom: 20px;
+        border-radius: 5px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -230,26 +243,49 @@ if st.button("🚀 Gerar Plano (PDF)", type="primary"):
             genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
             model = genai.GenerativeModel('models/gemini-2.5-flash')
             prompt = f"""
-            Aja como Pedagogo do SNE Moçambique.
-            Plano: {disciplina}, {classe}, Tema: {tema}.
-            REGRAS:
-            1. TPC: Correção (Início), Marcação (Fim).
-            2. OBJETIVOS: Max 3.
-            3. TABELA: Separada por "||".
-            4. TEMPO: Use apenas números (ex: 5, 10, 15).
-            5. FUNÇÕES DIDÁTICAS: Use exatamente estas quatro:
+            Aja como Pedagogo especialista do SNE Moçambique. Elabore um plano de aula seguindo estas regras:
+
+            DISCIPLINA: {disciplina}
+            CLASSE: {classe}
+            TEMA: {tema}
+            UNIDADE: {unidade}
+            DURAÇÃO: {duracao}
+            TIPO DE AULA: {tipo_aula}
+
+            REGRAS ESTRITAS:
+            1. TPC: Correção no início, marcação no fim.
+            2. OBJETIVOS: Máximo 3 objetivos específicos.
+            3. OBJETIVO GERAL: Um objetivo claro e abrangente.
+            4. TABELA: Separada por "||".
+            5. TEMPO: Use apenas números (ex: 5, 10, 15).
+            6. FUNÇÕES DIDÁTICAS: Use exatamente estas quatro, sem repetir:
                - Introdução e Motivação
                - Mediação e Assimilação
                - Domínio e Consolidação
                - Controlo e Avaliação
-            SAÍDA: [BLOCO_OBJETIVOS]...[FIM_OBJETIVOS] [BLOCO_TABELA]...[FIM_TABELA]
+            7. CONTEÚDO: Direto, preciso e específico ao tema.
+            8. ACTIVIDADES DO ALUNO: Ações concretas que os alunos fazem.
+            9. MÉTODOS: Técnicas pedagógicas usadas.
+            10. MEIOS: Recursos e materiais utilizados.
+            11. LINGUAGEM: Simples, didática e humana.
+            
+            SAÍDA EXATA:
+            [BLOCO_OBJETIVO_GERAL]...[FIM_OBJETIVO_GERAL]
+            [BLOCO_OBJETIVOS]...[FIM_OBJETIVOS] 
+            [BLOCO_TABELA]...[FIM_TABELA]
+
+            Exemplo de linha de tabela:
+            5 || Introdução e Motivação || Definição de vogal || Professor apresenta exemplos || Alunos identificam vogais || Discussão guiada || Quadro e marcadores
             """
             response = model.generate_content(prompt)
             texto = response.text
             
+            objetivo_geral = "..."
             objetivos = "..."
             dados = []
             
+            if "[BLOCO_OBJETIVO_GERAL]" in texto:
+                objetivo_geral = texto.split("[BLOCO_OBJETIVO_GERAL]")[1].split("[FIM_OBJETIVO_GERAL]")[0].strip()
             if "[BLOCO_OBJETIVOS]" in texto:
                 objetivos = texto.split("[BLOCO_OBJETIVOS]")[1].split("[FIM_OBJETIVOS]")[0].strip()
             if "[BLOCO_TABELA]" in texto:
@@ -268,6 +304,7 @@ if st.button("🚀 Gerar Plano (PDF)", type="primary"):
             st.session_state['plano_pronto'] = True
             st.session_state['dados_pdf'] = dados
             st.session_state['objs_pdf'] = objetivos
+            st.session_state['obj_geral_pdf'] = objetivo_geral
             st.session_state['inputs_pdf'] = {'disciplina': disciplina, 'classe': classe, 'duracao': duracao, 'tema': tema, 'unidade': unidade, 'tipo_aula': tipo_aula, 'turma': turma}
             st.rerun()
 
@@ -281,15 +318,19 @@ if st.session_state.get('plano_pronto'):
     
     dados = st.session_state['dados_pdf']
     objetivos = st.session_state['objs_pdf']
+    objetivo_geral = st.session_state['obj_geral_pdf']
     inputs = st.session_state['inputs_pdf']
     
-    st.markdown('<div class="info-box"><h4>🎯 Objectivos Específicos:</h4></div>', unsafe_allow_html=True)
+    st.markdown('<div class="info-box"><h4>🎯 Objectivo Geral:</h4></div>', unsafe_allow_html=True)
+    st.info(objetivo_geral)
+    
+    st.markdown('<div class="info-box"><h4>📋 Objectivos Específicos:</h4></div>', unsafe_allow_html=True)
     st.info(objetivos)
     
     if dados:
         # Criar DataFrame com os dados
         df = pd.DataFrame(dados, columns=["Tempo", "Função Didática", "Conteúdo", "Activ. Professor", "Activ. Aluno", "Métodos", "Meios"])
-        st.subheader("📋 Estrutura do Plano")
+        st.subheader("📝 Estrutura do Plano")
         st.dataframe(df, hide_index=True)
         
         # Explicação sobre as funções didáticas
@@ -305,7 +346,7 @@ if st.session_state.get('plano_pronto'):
         c1, c2 = st.columns([1, 1])
         with c1:
             try:
-                pdf_bytes = create_pdf(inputs, dados, objetivos)
+                pdf_bytes = create_pdf(inputs, dados, objetivos, objetivo_geral)
                 st.download_button("📄 Baixar PDF Oficial", data=pdf_bytes, file_name=f"Plano_{inputs['disciplina']}.pdf", mime="application/pdf", type="primary")
             except Exception as e:
                 st.error(f"Erro ao criar PDF: {e}")
