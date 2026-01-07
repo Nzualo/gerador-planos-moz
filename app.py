@@ -66,34 +66,29 @@ def create_pdf_table(inputs, table_data, objetivos_text):
     pdf.set_auto_page_break(auto=False)
     pdf.add_page()
     
-    # --- CABEÇALHO ADMINISTRATIVO (ESTILO FORMULÁRIO) ---
+    # --- CABEÇALHO ADMINISTRATIVO ---
     pdf.set_font("Arial", size=10)
     
-    # Linha 1: Escola e Data
     pdf.cell(130, 7, f"Escola: __________________________________________________", 0, 0)
     pdf.cell(0, 7, f"Data: ____/____/2026", 0, 1)
     
-    # Linha 2: Unidade Temática
     pdf.cell(0, 7, f"Unidade Temática: {inputs['unidade']}", 0, 1)
     
-    # Linha 3: Tema
     pdf.set_font("Arial", "B", 10)
     pdf.cell(0, 7, f"Tema: {inputs['tema']}", 0, 1)
     pdf.set_font("Arial", size=10)
     
-    # Linha 4: Professor e Turma
     pdf.cell(100, 7, f"Professor: ______________________________", 0, 0)
     pdf.cell(50, 7, f"Turma: {inputs['turma']}", 0, 0)
     pdf.cell(0, 7, f"Duração: {inputs['duracao']}", 0, 1)
     
-    # Linha 5: Tipo de Aula e Alunos
     pdf.cell(100, 7, f"Tipo de Aula: {inputs['tipo_aula']}", 0, 0)
     pdf.cell(0, 7, f"Nº Alunos: M_____  F_____  Total:_____", 0, 1)
     
     pdf.line(10, pdf.get_y()+2, 200, pdf.get_y()+2)
     pdf.ln(5)
 
-    # --- OBJETIVOS (Conciso) ---
+    # --- OBJETIVOS ---
     pdf.set_font("Arial", "B", 9)
     pdf.cell(0, 6, "OBJECTIVOS ESPECÍFICOS:", 0, 1)
     pdf.set_font("Arial", size=9)
@@ -120,63 +115,74 @@ st.title("🇲🇿 SNE - Planificador Profissional")
 
 with st.sidebar:
     api_key = st.text_input("Chave API:", type="password")
-    st.info("Modelo ajustado para SNE Moçambique.")
+    st.info("Modelo ajustado com regras de TPC (Correção e Marcação).")
 
-# Formulário Principal
+# Formulário
 col1, col2 = st.columns(2)
 with col1:
     disciplina = st.text_input("Disciplina", "Língua Portuguesa")
     classe = st.selectbox("Classe", ["1ª", "2ª", "3ª", "4ª", "5ª", "6ª", "7ª", "8ª", "9ª", "10ª", "11ª", "12ª"])
     unidade = st.text_input("Unidade Temática", placeholder="Ex: Textos Normativos")
-    tipo_aula = st.selectbox("Tipo de Aula", ["Inicial / Conteúdo Novo", "Continuação / Exercitação", "Revisão e Consolidação", "Avaliação (ACS/ACP)"])
+    tipo_aula = st.selectbox("Tipo de Aula", ["Inicial / Conteúdo Novo", "Continuação / Exercitação", "Revisão e Consolidação", "Avaliação"])
 
 with col2:
     duracao = st.selectbox("Duração", ["45 Minutos", "90 Minutos"])
     turma = st.text_input("Turma", placeholder="Ex: A")
     tema = st.text_input("Tema da Aula", placeholder="Ex: Leitura da letra M")
 
-if st.button("Gerar Plano SNE (Completo)", type="primary"):
+if st.button("Gerar Plano SNE (Com TPC)", type="primary"):
     if not api_key:
         st.error("Insira a chave API.")
     else:
-        with st.spinner('A consultar metodologias participativas...'):
+        with st.spinner('A estruturar a aula com correção e marcação de TPC...'):
             try:
                 genai.configure(api_key=api_key)
                 model = genai.GenerativeModel('models/gemini-2.5-flash')
                 
-                # --- PROMPT PEDAGÓGICO AVANÇADO ---
+                # --- PROMPT PEDAGÓGICO REFINADO (TPC OBRIGATÓRIO) ---
                 prompt = f"""
                 Aja como Pedagogo do SNE Moçambique.
                 Elabore um plano de aula para:
                 Disciplina: {disciplina}, Classe: {classe}
                 Unidade: {unidade}, Tema: {tema}
-                Tipo de Aula: {tipo_aula}
+                Tipo: {tipo_aula}
 
-                REGRAS OBRIGATÓRIAS:
-                1. OBJETIVOS: Gere no MÁXIMO 3 objetivos específicos. Devem ser curtos, diretos e operacionais (Ex: Identificar, Mencionar, Resolver).
+                REGRAS OBRIGATÓRIAS (ESTRUTURA DA AULA):
                 
-                2. MÉTODOS: Na coluna métodos, dê prioridade a métodos participativos (Ex: Elaboração Conjunta, Chuva de Ideias, Trabalho Independente, Discussão em Grupo).
+                1. INTRODUÇÃO E MOTIVAÇÃO:
+                   - OBRIGATÓRIO incluir na coluna Conteúdo: "Controle de presenças" e "Correção do TPC".
+                   - O professor deve orientar a correção.
                 
-                3. TABELA: Gere os dados separados por "||".
-                Colunas: Tempo || Função Didática || Conteúdo || Actividade Professor || Actividade Aluno || Métodos || Meios
+                2. MEDIAÇÃO E ASSIMILAÇÃO:
+                   - Explicação da matéria nova ou exercitação.
                 
-                Gere 4 linhas correspondentes às Funções Didáticas (Introdução, Mediação, Domínio, Controle).
+                3. DOMÍNIO E CONSOLIDAÇÃO:
+                   - Exercícios de aplicação.
+                
+                4. CONTROLE E AVALIAÇÃO:
+                   - OBRIGATÓRIO incluir na coluna Conteúdo: "Marcação do TPC" (Trabalho Para Casa).
+                   - O professor passa o TPC e o aluno anota.
+
+                REGRAS GERAIS:
+                - Objetivos: Máximo 3, curtos e operacionais.
+                - Métodos: Use métodos participativos (Ex: Elaboração Conjunta).
+                - Tabela: Use separador "||".
                 
                 FORMATO DE SAÍDA:
                 [BLOCO_OBJETIVOS]
-                - Objetivo 1
-                - Objetivo 2
+                - ...
                 [FIM_OBJETIVOS]
 
                 [BLOCO_TABELA]
-                ...dados...
+                Tempo || Função Didática || Conteúdo || Actividade Professor || Actividade Aluno || Métodos || Meios
+                ... (gere as 4 linhas seguindo as regras acima) ...
                 [FIM_TABELA]
                 """
                 
                 response = model.generate_content(prompt)
                 texto = response.text
                 
-                # Extração
+                # Processamento
                 objetivos = "..."
                 dados = []
                 
@@ -195,13 +201,12 @@ if st.button("Gerar Plano SNE (Completo)", type="primary"):
                             while len(cols) < 7: cols.append("-")
                             dados.append(cols)
                 
-                # Inputs para o PDF
+                # Gerar PDF
                 inputs_pdf = {
                     'disciplina': disciplina, 'classe': classe, 'duracao': duracao,
                     'tema': tema, 'unidade': unidade, 'tipo_aula': tipo_aula, 'turma': turma
                 }
 
-                # Preview
                 st.subheader("👁️ Pré-visualização")
                 st.info(objetivos)
                 if dados:
@@ -209,7 +214,7 @@ if st.button("Gerar Plano SNE (Completo)", type="primary"):
                     st.dataframe(df, hide_index=True)
                     
                     pdf_bytes = create_pdf_table(inputs_pdf, dados, objetivos)
-                    st.download_button("⬇️ Baixar Plano SNE", data=pdf_bytes, file_name=f"Plano_{disciplina}.pdf", mime="application/pdf")
+                    st.download_button("⬇️ Baixar Plano SNE (Final)", data=pdf_bytes, file_name=f"Plano_{disciplina}.pdf", mime="application/pdf")
                 
             except Exception as e:
                 st.error(f"Erro: {e}")
