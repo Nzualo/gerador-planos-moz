@@ -46,11 +46,13 @@ def check_password():
     # Coluna de Contacto (WhatsApp)
     with col2:
         st.warning("⚠️ Suporte / Aquisição de Acesso")
-        st.markdown("**Precisa de um usuário e senha?**")
-        st.write("Fale directamente com o Administrador via WhatsApp:")
+        st.markdown("**Precisa de acesso?**")
+        st.write("Clique no botão abaixo para solicitar ao Administrador:")
         
+        # DADOS OCULTOS
         meu_numero = "258867926665"
-        mensagem = "Saudações. Gostaria de solicitar acesso ao Gerador de Planos de Aula (SDEJT)."
+        mensagem = "Saudações técnico Nzualo. Gostaria de solicitar acesso ao Gerador de Planos de Aulas."
+        
         link_zap = f"https://wa.me/{meu_numero}?text={mensagem.replace(' ', '%20')}"
         
         st.markdown(f'''
@@ -65,7 +67,7 @@ def check_password():
                     cursor:pointer;
                     font-size: 16px;
                     font-weight:bold;">
-                    📱 Falar no WhatsApp ({meu_numero})
+                    📱 Falar no WhatsApp
                 </button>
             </a>
             ''', unsafe_allow_html=True)
@@ -137,7 +139,6 @@ class PDF(FPDF):
         self.set_y(y_start + height)
 
     def draw_table_header(self, widths):
-        # Cabeçalho sem a coluna Conteúdo
         headers = ["TEMPO", "F. DIDÁTICA", "ACTIV. PROFESSOR", "ACTIV. ALUNO", "MÉTODOS", "MEIOS"]
         self.set_font("Arial", "B", 7)
         self.set_fill_color(220, 220, 220)
@@ -182,8 +183,7 @@ def create_pdf(inputs, dados, obj_geral, obj_especificos):
     pdf.multi_cell(0, 5, pdf.clean_text(obj_especificos))
     pdf.ln(5)
 
-    # Tabela (6 Colunas)
-    # Larguras: Tempo(12), F.Didatica(40), Prof(45), Aluno(45), Metodos(23), Meios(25)
+    # Tabela
     widths = [12, 40, 45, 45, 23, 25] 
     pdf.draw_table_header(widths)
     for row in dados:
