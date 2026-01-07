@@ -74,39 +74,49 @@ class PDF(FPDF):
         self.cell(0, 10, 'SDEJT Inhassoro - Processado por IA', 0, 0, 'C')
 
     def clean_text(self, text):
-        if text is None: return ""
+        if text is None: return "-"
+        text = str(text).strip()
         replacements = {'–': '-', '“': '"', '”': '"', '‘': "'", '’': "'", '…': '...', '•': '-'}
-        text = str(text)
         for k, v in replacements.items():
             text = text.replace(k, v)
         return text
 
     def table_row(self, data, widths):
-        data = [self.clean_text(d) for d in data]
+        # Limpeza prévia dos dados da linha
+        row_data = [self.clean_text(d) for d in data]
+        
+        # Calcular altura máxima da linha
         max_lines = 1
-        for i, text in enumerate(data):
+        for i, text in enumerate(row_data):
             self.set_font("Arial", size=8)
+            # Simula a escrita para contar linhas
             lines = self.multi_cell(widths[i], 4, text, split_only=True)
             if len(lines) > max_lines: max_lines = len(lines)
         
         height = max_lines * 4 + 4
+        
+        # Quebra de página se necessário
         if self.get_y() + height > 270:
             self.add_page()
             self.draw_table_header(widths)
 
         x_start = self.get_x()
         y_start = self.get_y()
-        for i, text in enumerate(data):
+        
+        # Desenha o texto nas células
+        for i, text in enumerate(row_data):
             self.set_xy(x_start, y_start)
             self.set_font("Arial", size=8)
-            self.multi_cell(widths[i], 4, text, border=0)
+            self.multi_cell(widths[i], 4, text, border=0, align='L')
             x_start += widths[i]
 
+        # Desenha as bordas (retângulos)
         self.set_xy(10, y_start)
         x_curr = 10
         for w in widths:
             self.rect(x_curr, y_start, w, height)
             x_curr += w
+            
         self.set_y(y_start + height)
 
     def draw_table_header(self, widths):
@@ -122,7 +132,7 @@ def create_pdf(inputs, dados, obj_geral, obj_especificos):
     pdf.set_auto_page_break(auto=False)
     pdf.add_page()
     
-    # --- CABEÇALHO DADOS ---
+    # Cabeçalho
     pdf.set_font("Arial", size=10)
     pdf.cell(130, 7, f"Escola: __________________________________________________", 0, 0)
     pdf.cell(0, 7, f"Data: ____/____/2026", 0, 1)
@@ -141,11 +151,10 @@ def create_pdf(inputs, dados, obj_geral, obj_especificos):
     pdf.line(10, pdf.get_y()+2, 200, pdf.get_y()+2)
     pdf.ln(5)
 
-    # --- OBJETIVOS (ATUALIZADO) ---
+    # Objetivos
     pdf.set_font("Arial", "B", 10)
     pdf.cell(40, 6, "OBJETIVO GERAL:", 0, 0)
     pdf.set_font("Arial", size=10)
-    # Multi cell para o objetivo geral caso seja longo
     curr_y = pdf.get_y()
     pdf.set_xy(50, curr_y)
     pdf.multi_cell(0, 6, pdf.clean_text(obj_geral))
@@ -157,8 +166,9 @@ def create_pdf(inputs, dados, obj_geral, obj_especificos):
     pdf.multi_cell(0, 5, pdf.clean_text(obj_especificos))
     pdf.ln(5)
 
-    # --- TABELA ---
-    widths = [12, 35, 30, 35, 35, 20, 20]
+    # Tabela (Larguras ajustadas para evitar sobreposição)
+    # Tempo, F.Didatica, Conteudo, Prof, Aluno, Metodos, Meios
+    widths = [12, 35, 35, 35, 30, 20, 23] 
     pdf.draw_table_header(widths)
     for row in dados:
         pdf.table_row(row, widths)
@@ -185,64 +195,57 @@ with col2:
     tema = st.text_input("Tema", placeholder="Ex: Vogais")
 
 # --- GERAÇÃO IA ---
-if st.button("🚀 Gerar Plano (Alinhado ao Programa)", type="primary"):
-    with st.spinner('A consultar os Programas de Ensino de Moçambique...'):
+if st.button("🚀 Gerar Plano Completo", type="primary"):
+    with st.spinner('A organizar as colunas e alinhar conteúdos...'):
         try:
             genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-            
-            # MODELO MANTIDO (Gemini 2.5 Flash)
             model = genai.GenerativeModel('models/gemini-2.5-flash') 
             
             prompt = f"""
-            Aja como Pedagogo Especialista do SNE (Sistema Nacional de Educação) de Moçambique.
-            Elabore um plano de aula rigorosamente alinhado aos Programas de Ensino vigentes (Primário ou Secundário conforme a classe).
+            Aja como Pedagogo Especialista do SNE Moçambique.
+            Plano: {disciplina}, {classe}, Tema: {tema}.
             
-            DADOS: Disciplina: {disciplina}, Classe: {classe}, Tema: {tema}, Duração: {duracao}.
-
-            REGRAS PEDAGÓGICAS ESTRITAS:
-            1. OBJETIVOS: Devem começar OBRIGATORIAMENTE com VERBOS NO INFINITIVO (Ex: Identificar, Descrever, Calcular).
-            2. ALINHAMENTO: O nível de profundidade deve corresponder exatamente ao programa da {classe} Classe em Moçambique.
-            3. ESTRUTURA: Incluir 1 Objetivo Geral e até 3 Específicos.
-            4. TABELA: Deve ter EXATAMENTE 4 etapas (Funções Didáticas):
-               1. Introdução e Motivação
-               2. Mediação e Assimilação
-               3. Domínio e Consolidação
-               4. Controlo e Avaliação
-            5. TEMPO: Apenas números na coluna tempo.
-
-            SAÍDA ESPERADA (Não use markdown, use apenas os blocos):
+            REGRAS DE FORMATAÇÃO ESTRITAS (PARA NÃO QUEBRAR A TABELA):
+            1. A tabela TEM QUE TER 7 COLUNAS PREENCHIDAS para cada linha.
+            2. NENHUMA COLUNA PODE FICAR VAZIA. Se não houver texto, escreva "-".
+            3. Use o separador "||" com espaços ao redor.
             
-            [BLOCO_GERAL]
-            Compreender... (Verbo no Infinitivo)
-            [FIM_GERAL]
+            COLUNAS OBRIGATÓRIAS:
+            Tempo || Função Didática || Conteúdo || Actividade Professor || Actividade Aluno || Métodos || Meios
 
-            [BLOCO_ESPECIFICOS]
-            - Identificar...
-            - Diferenciar...
-            [FIM_ESPECIFICOS]
-            
+            AS 4 FUNÇÕES DIDÁTICAS OBRIGATÓRIAS (UMA EM CADA LINHA):
+            1. Introdução e Motivação
+            2. Mediação e Assimilação
+            3. Domínio e Consolidação
+            4. Controlo e Avaliação
+
+            EXEMPLO DE LINHA PERFEITA (SIGA ESTE PADRÃO):
+            5 || 1. Introdução e Motivação || Controle de Presenças || Saúda e marca faltas || Respondem à chamada || Elaboração Conjunta || Livro de Ponto
+
+            OBJETIVOS:
+            - Verbos no infinitivo.
+            - Alinhados ao programa de ensino moçambicano.
+
+            SAÍDA:
+            [BLOCO_GERAL]...[FIM_GERAL]
+            [BLOCO_ESPECIFICOS]...[FIM_ESPECIFICOS]
             [BLOCO_TABELA]
-            5 || 1. Introdução e Motivação || ...
-            15 || 2. Mediação e Assimilação || ...
+            ... (Insira as 4 linhas aqui seguindo o exemplo acima)
             [FIM_TABELA]
             """
             
             response = model.generate_content(prompt)
             texto = response.text
             
-            # Variáveis
-            obj_geral = "Não definido"
+            obj_geral = "Definido pelo programa"
             obj_especificos = ""
             dados = []
             
-            # Extração segura
             if "[BLOCO_GERAL]" in texto:
                 obj_geral = texto.split("[BLOCO_GERAL]")[1].split("[FIM_GERAL]")[0].strip()
-            
             if "[BLOCO_ESPECIFICOS]" in texto:
                 obj_especificos = texto.split("[BLOCO_ESPECIFICOS]")[1].split("[FIM_ESPECIFICOS]")[0].strip()
-            # Caso a IA use o formato antigo por engano
-            elif "[BLOCO_OBJETIVOS]" in texto:
+            elif "[BLOCO_OBJETIVOS]" in texto: # Fallback
                 obj_especificos = texto.split("[BLOCO_OBJETIVOS]")[1].split("[FIM_OBJETIVOS]")[0].strip()
 
             if "[BLOCO_TABELA]" in texto:
@@ -250,8 +253,15 @@ if st.button("🚀 Gerar Plano (Alinhado ao Programa)", type="primary"):
                 lines = block.split('\n')
                 for l in lines:
                     if "||" in l and "Função" not in l:
+                        # Split e limpeza de cada coluna
                         cols = [c.strip() for c in l.split("||")]
-                        while len(cols) < 7: cols.append("-")
+                        
+                        # GARANTIA DE 7 COLUNAS
+                        # Se a IA gerar menos colunas, preenchemos com "-" para não encavalar
+                        while len(cols) < 7: 
+                            cols.append("-")
+                        
+                        # Se a IA gerar mais, cortamos (mas o prompt deve evitar isso)
                         dados.append(cols[:7])
             
             st.session_state['plano_pronto'] = True
@@ -262,12 +272,12 @@ if st.button("🚀 Gerar Plano (Alinhado ao Programa)", type="primary"):
             st.rerun()
 
         except Exception as e:
-            st.error(f"Erro ao gerar: {e}")
+            st.error(f"Erro: {e}")
 
 # --- RESULTADO ---
 if st.session_state.get('plano_pronto'):
     st.divider()
-    st.subheader("✅ Plano Gerado (Padrão SNE)")
+    st.subheader("✅ Plano Gerado e Alinhado")
     
     dados = st.session_state['dados_pdf']
     obj_geral = st.session_state['obj_geral']
@@ -278,6 +288,7 @@ if st.session_state.get('plano_pronto'):
     st.info(obj_especificos)
     
     if dados:
+        # Mostra tabela na tela para conferência
         df = pd.DataFrame(dados, columns=["Tempo", "F. Didática", "Conteúdo", "Prof", "Aluno", "Métodos", "Meios"])
         st.dataframe(df, hide_index=True, use_container_width=True)
         
@@ -285,9 +296,9 @@ if st.session_state.get('plano_pronto'):
         with c1:
             try:
                 pdf_bytes = create_pdf(inputs, dados, obj_geral, obj_especificos)
-                st.download_button("📄 Baixar PDF Oficial", data=pdf_bytes, file_name="Plano_Aula.pdf", mime="application/pdf", type="primary")
+                st.download_button("📄 Baixar PDF Oficial", data=pdf_bytes, file_name=f"Plano_{inputs['disciplina']}.pdf", mime="application/pdf", type="primary")
             except Exception as e:
-                st.error(f"Erro PDF: {e}")
+                st.error(f"Erro ao criar PDF: {e}")
         with c2:
             if st.button("🔄 Novo Plano"):
                 st.session_state['plano_pronto'] = False
