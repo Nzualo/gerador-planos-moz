@@ -14,7 +14,8 @@ st.markdown("""
     [data-testid="stSidebar"] { background-color: #262730; }
     .stTextInput > div > div > input, .stSelectbox > div > div > div, .stTextArea > div > div > textarea { color: #ffffff; }
     h1, h2, h3 { color: #FF4B4B !important; }
-    .stFileUploader { background-color: #1E1E1E; border-radius: 10px; padding: 10px; }
+    /* Estilo para o campo de upload */
+    .stFileUploader { background-color: #1E1E1E; border: 2px dashed #FF4B4B; border-radius: 10px; padding: 10px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -57,21 +58,14 @@ def check_password():
 if not check_password():
     st.stop()
 
-# --- BARRA LATERAL (COM UPLOAD DE ARQUIVO) ---
+# --- BARRA LATERAL ---
 with st.sidebar:
     st.success(f"👤 Técnico: **{st.session_state['user_name']}**")
-    st.divider()
-    st.markdown("### 📚 Material de Apoio")
-    arquivo_enviado = st.file_uploader("Enviar PDF ou Foto do Livro para basear o plano", type=['pdf', 'png', 'jpg', 'jpeg'])
-    if arquivo_enviado:
-        st.info(f"Ficheiro '{arquivo_enviado.name}' carregado com sucesso!")
-    
-    st.divider()
     if st.button("Sair"):
         st.session_state["password_correct"] = False
         st.rerun()
 
-# --- CLASSE PDF PARA EXPORTAÇÃO ---
+# --- CLASSE PDF ---
 class PDF(FPDF):
     def header(self):
         self.set_font('Arial', 'B', 12)
@@ -105,19 +99,14 @@ class PDF(FPDF):
             if len(lines) > max_lines: max_lines = len(lines)
         height = max_lines * 4 + 4
         if self.get_y() + height > 270:
-            self.add_page()
-            self.draw_table_header(widths)
+            self.add_page(); self.draw_table_header(widths)
         x_start, y_start = self.get_x(), self.get_y()
         for i, text in enumerate(row_data):
-            self.set_xy(x_start, y_start)
-            self.set_font("Arial", size=8)
+            self.set_xy(x_start, y_start); self.set_font("Arial", size=8)
             self.multi_cell(widths[i], 4, text, border=0, align='L')
             x_start += widths[i]
-        self.set_xy(10, y_start)
-        x_curr = 10
-        for w in widths:
-            self.rect(x_curr, y_start, w, height)
-            x_curr += w
+        self.set_xy(10, y_start); x_curr = 10
+        for w in widths: self.rect(x_curr, y_start, w, height); x_curr += w
         self.set_y(y_start + height)
 
     def draw_table_header(self, widths):
@@ -148,48 +137,39 @@ def create_pdf(inputs, dados, obj_geral, obj_especificos):
     for row in dados: pdf.table_row(row, widths)
     return pdf.output(dest='S').encode('latin-1', 'replace')
 
-# --- LÓGICA DE GERAÇÃO COM FICHEIROS ---
-def gerar_plano(instrucoes_adicionais=""):
+# --- LÓGICA DE GERAÇÃO ---
+def gerar_plano(instrucoes_adicionais="", arquivo=None):
     try:
         genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
         duracao = st.session_state['tmp_duracao']
         qtd_geral = "2 (Dois)" if "90" in duracao else "1 (Um)"
         qtd_especificos = "5 (Cinco)" if "90" in duracao else "3 (Três)"
         
-        # Preparar partes do prompt para IA (Texto + Ficheiro se houver)
         conteudo_prompt = [f"""Aja como Pedagogo Especialista do SNE Moçambique.
         Plano: {st.session_state['tmp_disciplina']}, {st.session_state['tmp_classe']}, Tema: {st.session_state['tmp_tema']}, Duração: {duracao}.
-        Ajustes solicitados: {instrucoes_adicionais if instrucoes_adicionais else "Nenhum"}.
-        
+        Ajustes: {instrucoes_adicionais if instrucoes_adicionais else "Nenhum"}.
         REGRAS:
-        - Use as informações do arquivo enviado (se houver) para criar atividades baseadas no livro real.
+        - Use as informações do arquivo enviado (se houver) para as atividades.
         - Objetivo Geral: EXATAMENTE {qtd_geral}.
         - Objetivos Específicos: NO MÁXIMO {qtd_especificos}.
         - Tabela: 6 colunas (Tempo, Função, Act. Prof, Act. Aluno, Métodos, Meios).
         - Actividades: MUITO DETALHADAS.
-        
         SAÍDA: [BLOCO_GERAL]...[FIM_GERAL] [BLOCO_ESPECIFICOS]...[FIM_ESPECIFICOS] [BLOCO_TABELA]...[FIM_TABELA]"""]
 
-        # Adicionar ficheiro se existir
-        if arquivo_enviado:
-            if arquivo_enviado.type in ['image/png', 'image/jpeg', 'image/jpg']:
-                img = Image.open(arquivo_enviado)
-                conteudo_prompt.append(img)
-            else: # PDF
-                # Nota: Em Streamlit puro para ler PDF com Gemini Flash requer manipulação de bytes ou lib extra
-                # Vamos enviar os bytes como dados se o modelo suportar ou avisar
-                conteudo_prompt.append({"mime_type": "application/pdf", "data": arquivo_enviado.getvalue()})
+        if arquivo:
+            if arquivo.type in ['image/png', 'image/jpeg', 'image/jpg']:
+                conteudo_prompt.append(Image.open(arquivo))
+            else:
+                conteudo_prompt.append({"mime_type": "application/pdf", "data": arquivo.getvalue()})
 
-        # Escolha do modelo
         try: model = genai.GenerativeModel('models/gemini-2.5-flash')
         except: model = genai.GenerativeModel('models/gemini-1.5-flash')
         
         response = model.generate_content(conteudo_prompt)
         texto = response.text
         
-        # Parse dos blocos
-        obj_geral = texto.split("[BLOCO_GERAL]")[1].split("[FIM_GERAL]")[0].strip() if "[BLOCO_GERAL]" in texto else "Consultar Programa"
-        obj_especificos = texto.split("[BLOCO_ESPECIFICOS]")[1].split("[FIM_ESPECIFICOS]")[0].strip() if "[BLOCO_ESPECIFICOS]" in texto else ""
+        st.session_state['obj_geral'] = texto.split("[BLOCO_GERAL]")[1].split("[FIM_GERAL]")[0].strip() if "[BLOCO_GERAL]" in texto else "Consultar"
+        st.session_state['obj_especificos'] = texto.split("[BLOCO_ESPECIFICOS]")[1].split("[FIM_ESPECIFICOS]")[0].strip() if "[BLOCO_ESPECIFICOS]" in texto else ""
         
         dados = []
         if "[BLOCO_TABELA]" in texto:
@@ -199,12 +179,8 @@ def gerar_plano(instrucoes_adicionais=""):
                     cols = [c.strip() for c in l.split("||")]
                     while len(cols) < 6: cols.append("-")
                     dados.append(cols[:6])
-        
-        st.session_state['dados_pdf'] = dados
-        st.session_state['obj_geral'] = obj_geral
-        st.session_state['obj_especificos'] = obj_especificos
-        st.session_state['plano_pronto'] = True
-    except Exception as e: st.error(f"Erro na geração: {e}")
+        st.session_state['dados_pdf'] = dados; st.session_state['plano_pronto'] = True
+    except Exception as e: st.error(f"Erro: {e}")
 
 # --- INTERFACE PRINCIPAL ---
 st.title("🇲🇿 Elaboração de Planos de Aulas")
@@ -214,19 +190,23 @@ with col1:
     disciplina = st.text_input("Disciplina", "Língua Portuguesa", key='tmp_disciplina')
     classe = st.selectbox("Classe", ["1ª", "2ª", "3ª", "4ª", "5ª", "6ª", "7ª", "8ª", "9ª", "10ª", "11ª", "12ª"], key='tmp_classe')
     unidade = st.text_input("Unidade", placeholder="Ex: Textos Normativos", key='tmp_unidade')
-    tipo_aula = st.selectbox("Tipo de Aula", ["Introdução de Matéria Nova", "Consolidação e Exercitação", "Verificação e Avaliação", "Revisão"], key='tmp_tipo_aula')
 with col2:
     duracao = st.selectbox("Duração", ["45 Min", "90 Min"], key='tmp_duracao')
     turma = st.text_input("Turma", placeholder="A", key='tmp_turma')
     tema = st.text_input("Tema", placeholder="Ex: Vogais", key='tmp_tema')
 
+tipo_aula = st.selectbox("Tipo de Aula", ["Introdução de Matéria Nova", "Consolidação e Exercitação", "Verificação e Avaliação", "Revisão"], key='tmp_tipo_aula')
+
+# --- CAMPO DE ARQUIVO NO CENTRO ---
+st.markdown("### 📚 Material de Apoio (Opcional)")
+arquivo_enviado = st.file_uploader("Carregar PDF ou Foto do Livro", type=['pdf', 'png', 'jpg', 'jpeg'])
+
 if st.button("🚀 Gerar Plano de Aula", type="primary"):
-    gerar_plano()
+    gerar_plano(arquivo=arquivo_enviado)
 
 # --- RESULTADO E REFINAMENTO ---
 if st.session_state.get('plano_pronto'):
-    st.divider()
-    st.subheader("📋 Pré-visualização do Plano")
+    st.divider(); st.subheader("📋 Pré-visualização")
     st.info(f"**Geral:** {st.session_state['obj_geral']}\n\n**Específicos:**\n{st.session_state['obj_especificos']}")
     
     if st.session_state['dados_pdf']:
@@ -234,16 +214,16 @@ if st.session_state.get('plano_pronto'):
         st.dataframe(df, hide_index=True, use_container_width=True)
 
     st.markdown("### 🛠️ Ajustar ou Melhorar")
-    ajuste = st.text_area("Ex: 'Use os exercícios da imagem que enviei', 'Melhore o tempo', etc.")
+    ajuste = st.text_area("Descreva o que deseja mudar...", placeholder="Ex: Adicione mais exercícios do livro...")
     
     c1, c2, c3 = st.columns(3)
     with c1:
         if st.button("🔄 Aplicar Melhorias"):
-            gerar_plano(ajuste); st.rerun()
+            gerar_plano(ajuste, arquivo=arquivo_enviado); st.rerun()
     with c2:
         inputs = {'unidade': unidade, 'tema': tema, 'turma': turma, 'duracao': duracao, 'tipo_aula': tipo_aula, 'disciplina': disciplina}
         pdf_bytes = create_pdf(inputs, st.session_state['dados_pdf'], st.session_state['obj_geral'], st.session_state['obj_especificos'])
-        st.download_button("📄 Baixar PDF Final", data=pdf_bytes, file_name="Plano_Aula_SDEJT.pdf", mime="application/pdf", type="primary")
+        st.download_button("📄 Baixar PDF Final", data=pdf_bytes, file_name="Plano_SDEJT.pdf", mime="application/pdf", type="primary")
     with c3:
         if st.button("🗑️ Limpar Tudo"):
             st.session_state['plano_pronto'] = False; st.rerun()
