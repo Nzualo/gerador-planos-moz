@@ -4,27 +4,74 @@ from fpdf import FPDF
 import pandas as pd
 import time
 
-# --- CONFIGURAÇÃO INICIAL ---
-st.set_page_config(page_title="SDEJT - Planos", page_icon="🇲🇿", layout="wide")
+# --- 1. CONFIGURAÇÃO (Primeira Linha Obrigatória) ---
+st.set_page_config(page_title="SDEJT Planos", page_icon="🇲🇿", layout="wide")
 
-# --- FUNÇÃO DE LOGIN E SEGURANÇA ---
+# --- 2. ESTILO VISUAL (Dark Mode SNE) ---
+st.markdown("""
+    <style>
+    /* Fundo Escuro Profissional */
+    .stApp {
+        background-color: #0E1117;
+        color: #E0E0E0;
+    }
+    
+    /* Inputs (Caixas de texto) */
+    .stTextInput > div > div > input {
+        color: #FFFFFF !important;
+        background-color: #262730 !important;
+        border: 1px solid #4CAF50;
+    }
+    
+    /* Selectbox */
+    .stSelectbox > div > div > div {
+        color: #FFFFFF !important;
+        background-color: #262730 !important;
+    }
+    
+    /* Botões */
+    div.stButton > button {
+        background-color: #4CAF50; /* Verde Institucional */
+        color: white;
+        border: none;
+        padding: 12px;
+        font-weight: bold;
+        width: 100%;
+        text-transform: uppercase;
+        font-family: 'Times New Roman', serif;
+        border-radius: 6px;
+    }
+    div.stButton > button:hover {
+        background-color: #45a049;
+    }
+    
+    /* Títulos */
+    h1, h2, h3, h4 {
+        font-family: 'Times New Roman', serif;
+        color: #4CAF50 !important;
+    }
+    
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    </style>
+    """, unsafe_allow_html=True)
+
+# --- 3. LOGIN ---
 def check_password():
     if st.session_state.get("password_correct", False):
         return True
 
-    # --- TÍTULO DO LOGIN (ATUALIZADO) ---
-    st.markdown("## 🇲🇿 Elaboração de Planos de Aulas")
-    st.markdown("##### Serviço Distrital de Educação, Juventude e Tecnologia - Inhassoro")
-    st.divider()
-    
-    col1, col2 = st.columns([1, 1])
-    
-    # Coluna 1: Login
-    with col1:
-        st.info("🔐 Área Restrita")
+    st.markdown("<br>", unsafe_allow_html=True)
+    with st.container(border=True):
+        st.markdown("<h3 style='text-align: center;'>🇲🇿 SDEJT - INHASSORO</h3>", unsafe_allow_html=True)
+        st.markdown("<h6 style='text-align: center; color: #aaa;'>Sistema de Elaboração de Planos</h6>", unsafe_allow_html=True)
+        st.divider()
+        
+        st.info("🔐 Acesso Restrito")
         usuario = st.text_input("Usuário")
         senha = st.text_input("Senha", type="password")
-        if st.button("Entrar", type="primary"):
+        
+        if st.button("ENTRAR", type="primary"):
             if "passwords" in st.secrets and usuario in st.secrets["passwords"]:
                 if st.secrets["passwords"][usuario] == senha:
                     st.session_state["password_correct"] = True
@@ -33,91 +80,62 @@ def check_password():
                 else:
                     st.error("Senha incorreta.")
             else:
-                st.error("Usuário desconhecido.")
-
-    # Coluna 2: WhatsApp
-    with col2:
-        st.warning("⚠️ Suporte")
-        st.write("Precisa de acesso? Fale com o Administrador.")
-        
-        # --- MENSAGEM WHATSAPP (SEM SNE) ---
-        meu_numero = "258867926665"
-        mensagem = "Olá Técnico Nzualo, gostaria de solicitar acesso ao Gerador de Planos."
-        link_zap = f"https://wa.me/{meu_numero}?text={mensagem.replace(' ', '%20')}"
-        
-        st.markdown(f'''
-            <a href="{link_zap}" target="_blank">
-                <button style="
-                    background-color:#25D366; 
-                    color:white; 
-                    border:none; 
-                    padding:10px 20px; 
-                    border-radius:5px; 
-                    width:100%; 
-                    cursor:pointer;
-                    font-weight:bold;">
-                    📱 Contactar via WhatsApp
-                </button>
-            </a>
-            ''', unsafe_allow_html=True)
+                st.error("Usuário não encontrado.")
     return False
 
 if not check_password():
     st.stop()
 
-# --- BARRA LATERAL ---
+# --- 4. BARRA LATERAL ---
 with st.sidebar:
-    st.success(f"👤 Olá, **{st.session_state['user_name']}**")
+    st.success(f"👤 Professor: {st.session_state.get('user_name', '')}")
     if st.button("Sair"):
         st.session_state["password_correct"] = False
         st.rerun()
 
-# --- CLASSE PDF (LINHAS PERFEITAS) ---
+# --- 5. CLASSE PDF (A4 HORIZONTAL + TIMES) ---
 class PDF(FPDF):
     def header(self):
-        self.set_font('Arial', 'B', 12)
+        self.set_font('Times', 'B', 12)
         self.cell(0, 5, 'REPÚBLICA DE MOÇAMBIQUE', 0, 1, 'C')
-        self.set_font('Arial', 'B', 10)
-        self.cell(0, 5, 'GOVERNO DO DISTRITO DE INHASSORO', 0, 1, 'C')
-        self.cell(0, 5, 'SERVIÇO DISTRITAL DE EDUCAÇÃO, JUVENTUDE E TECNOLOGIA', 0, 1, 'C')
+        self.set_font('Times', 'B', 11)
+        self.cell(0, 5, 'MINISTÉRIO DA EDUCAÇÃO E DESENVOLVIMENTO HUMANO', 0, 1, 'C')
+        self.cell(0, 5, 'SDEJT - DISTRITO DE INHASSORO', 0, 1, 'C')
         self.ln(5)
-        self.set_font('Arial', 'B', 14)
-        self.cell(0, 10, 'PLANO DE AULA', 0, 1, 'C')
+        self.set_font('Times', 'B', 14)
+        self.cell(0, 10, 'PLANO DE LIÇÃO', 0, 1, 'C')
         self.ln(2)
 
     def footer(self):
         self.set_y(-15)
-        self.set_font('Arial', 'I', 6)
+        self.set_font('Times', 'I', 8)
         self.cell(0, 10, 'SDEJT Inhassoro - Processado por IA', 0, 0, 'C')
 
     def table_row(self, data, widths):
         max_lines = 1
         for i, text in enumerate(data):
-            self.set_font("Arial", size=8)
-            texto_seguro = str(text) if text is not None else ""
-            lines = self.multi_cell(widths[i], 4, texto_seguro, split_only=True)
-            if len(lines) > max_lines: max_lines = len(lines)
+            self.set_font("Times", size=10)
+            texto = str(text) if text else "-"
+            lines = self.multi_cell(widths[i], 5, texto, split_only=True)
+            max_lines = max(max_lines, len(lines))
         
-        height = max_lines * 4 + 4
+        height = max_lines * 5 + 2
         
-        if self.get_y() + height > 270:
-            self.add_page()
-            headers = ["TEMPO", "F. DIDÁTICA", "CONTEÚDO", "ACTIV. PROFESSOR", "ACTIV. ALUNO", "MÉTODOS", "MEIOS"]
-            self.set_font("Arial", "B", 7)
-            self.set_fill_color(230, 230, 230)
-            for i, h in enumerate(headers):
-                self.cell(widths[i], 6, h, 1, 0, 'C', True)
-            self.ln()
-
+        # Quebra de página (Altura Paisagem ~180mm útil)
+        if self.get_y() + height > 180:
+            self.add_page(orientation='L')
+            self.create_headers(widths)
+            
         x_start = self.get_x()
         y_start = self.get_y()
+        
         for i, text in enumerate(data):
             self.set_xy(x_start, y_start)
-            self.set_font("Arial", size=8)
-            texto_seguro = str(text) if text is not None else ""
-            self.multi_cell(widths[i], 4, texto_seguro, border=0)
+            self.set_font("Times", size=10)
+            texto = str(text) if text else "-"
+            self.multi_cell(widths[i], 5, texto, border=0)
             x_start += widths[i]
-
+            
         self.set_xy(10, y_start)
         x_curr = 10
         for w in widths:
@@ -125,134 +143,147 @@ class PDF(FPDF):
             x_curr += w
         self.set_y(y_start + height)
 
+    def create_headers(self, widths):
+        headers = ["TEMPO", "F. DIDÁTICA", "CONTEÚDOS", "ACTIV. PROF", "ACTIV. ALUNO", "MÉTODOS", "MEIOS"]
+        self.set_font("Times", "B", 9)
+        self.set_fill_color(220, 220, 220)
+        for i, h in enumerate(headers):
+            self.cell(widths[i], 6, h, 1, 0, 'C', True)
+        self.ln()
+
 def create_pdf(inputs, dados, objetivos):
     pdf = PDF()
     pdf.set_auto_page_break(auto=False)
-    pdf.add_page()
+    pdf.add_page(orientation='L')
     
-    pdf.set_font("Arial", size=10)
-    pdf.cell(130, 7, f"Escola: __________________________________________________", 0, 0)
+    pdf.set_font("Times", size=12)
+    # Cabeçalho
+    pdf.cell(160, 7, f"Escola: _______________________________________________________", 0, 0)
     pdf.cell(0, 7, f"Data: ____/____/2026", 0, 1)
     pdf.cell(0, 7, f"Unidade Temática: {inputs['unidade']}", 0, 1)
     
-    pdf.set_font("Arial", "B", 10)
+    pdf.set_font("Times", "B", 12)
     pdf.cell(0, 7, f"Tema: {inputs['tema']}", 0, 1)
-    pdf.set_font("Arial", size=10)
+    pdf.set_font("Times", size=12)
     
-    pdf.cell(100, 7, f"Professor: ______________________________", 0, 0)
-    pdf.cell(50, 7, f"Turma: {inputs['turma']}", 0, 0)
+    pdf.cell(110, 7, f"Professor: ___________________________", 0, 0)
+    pdf.cell(40, 7, f"Turma: {inputs['turma']}", 0, 0)
     pdf.cell(0, 7, f"Duração: {inputs['duracao']}", 0, 1)
-    pdf.cell(100, 7, f"Tipo de Aula: {inputs['tipo_aula']}", 0, 0)
-    pdf.cell(0, 7, f"Nº Alunos: M_____  F_____  Total:_____", 0, 1)
     
-    pdf.line(10, pdf.get_y()+2, 200, pdf.get_y()+2)
+    pdf.cell(110, 7, f"Tipo de Aula: {inputs['tipo_aula']}", 0, 0)
+    pdf.cell(0, 7, f"Efetivos: M_____  F_____  Total:_____", 0, 1)
+    
+    pdf.line(10, pdf.get_y()+2, 285, pdf.get_y()+2)
     pdf.ln(5)
 
-    pdf.set_font("Arial", "B", 9)
-    pdf.cell(0, 6, "OBJECTIVOS ESPECÍFICOS:", 0, 1)
-    pdf.set_font("Arial", size=9)
+    pdf.set_font("Times", "B", 12)
+    pdf.cell(0, 6, "OBJECTIVOS:", 0, 1)
+    pdf.set_font("Times", size=12)
     pdf.multi_cell(0, 5, objetivos)
     pdf.ln(5)
 
-    widths = [12, 28, 35, 35, 35, 22, 23]
-    headers = ["TEMPO", "F. DIDÁTICA", "CONTEÚDO", "ACTIV. PROFESSOR", "ACTIV. ALUNO", "MÉTODOS", "MEIOS"]
-    pdf.set_font("Arial", "B", 7)
-    pdf.set_fill_color(230, 230, 230)
-    for i, h in enumerate(headers):
-        pdf.cell(widths[i], 6, h, 1, 0, 'C', True)
-    pdf.ln()
+    # Larguras ajustadas para A4 Horizontal (Total ~275mm)
+    # Tempo menor, Conteúdo maior
+    widths = [15, 40, 60, 50, 50, 30, 30]
+    pdf.create_headers(widths)
+    
     for row in dados:
         pdf.table_row(row, widths)
+        
     return pdf.output(dest='S').encode('latin-1', 'ignore')
 
-# --- TÍTULO PRINCIPAL (ATUALIZADO) ---
-st.title("🇲🇿 Elaboração de Planos de Aulas")
+# --- 6. APP PRINCIPAL ---
+st.title("🇲🇿 Elaboração de Planos (SNE)")
 
 if "GOOGLE_API_KEY" not in st.secrets:
-    st.error("⚠️ Erro: Configure os Secrets!")
+    st.error("⚠️ ERRO: Configure a Chave API nos Secrets.")
     st.stop()
 
-# --- FORMULÁRIO ---
-col1, col2 = st.columns(2)
-with col1:
-    disciplina = st.text_input("Disciplina", "Língua Portuguesa")
-    classe = st.selectbox("Classe", ["1ª", "2ª", "3ª", "4ª", "5ª", "6ª", "7ª", "8ª", "9ª", "10ª", "11ª", "12ª"])
-    unidade = st.text_input("Unidade", placeholder="Ex: Textos Normativos")
-    tipo_aula = st.selectbox("Tipo", ["Inicial", "Exercitação", "Revisão", "Avaliação"])
-with col2:
-    duracao = st.selectbox("Duração", ["45 Min", "90 Min"])
-    turma = st.text_input("Turma", placeholder="A")
-    tema = st.text_input("Tema", placeholder="Ex: Vogais")
+with st.container(border=True):
+    c1, c2 = st.columns(2)
+    with c1:
+        disciplina = st.text_input("Disciplina", "Língua Portuguesa")
+        classe = st.selectbox("Classe", ["1ª Classe", "2ª Classe", "3ª Classe", "4ª Classe", "5ª Classe", "6ª Classe", "7ª Classe", "8ª Classe", "9ª Classe", "10ª Classe", "11ª Classe", "12ª Classe"])
+        unidade = st.text_input("Unidade Temática", placeholder="Ex: Textos Normativos")
+        tipo_aula = st.selectbox("Tipo de Aula", ["Conteúdo Novo", "Exercitação", "Revisão", "Avaliação"])
+    with c2:
+        duracao = st.selectbox("Duração", ["45 Min (1 Tempo)", "90 Min (2 Tempos)"])
+        turma = st.text_input("Turma", placeholder="A")
+        tema = st.text_input("Tema", placeholder="Tema da aula...")
 
-# --- BOTÃO GERAR ---
-if st.button("🚀 Gerar Plano (PDF)", type="primary"):
-    with st.spinner('A elaborar o plano...'):
-        try:
-            genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-            model = genai.GenerativeModel('models/gemini-2.5-flash')
-            prompt = f"""
-            Aja como Pedagogo do SNE Moçambique.
-            Plano: {disciplina}, {classe}, Tema: {tema}.
-            REGRAS:
-            1. TPC: Correção (Início), Marcação (Fim).
-            2. OBJETIVOS: Max 3.
-            3. TABELA: Separada por "||".
-            SAÍDA: [BLOCO_OBJETIVOS]...[FIM_OBJETIVOS] [BLOCO_TABELA]...[FIM_TABELA]
-            """
-            response = model.generate_content(prompt)
-            texto = response.text
-            
-            objetivos = "..."
-            dados = []
-            
-            if "[BLOCO_OBJETIVOS]" in texto:
-                objetivos = texto.split("[BLOCO_OBJETIVOS]")[1].split("[FIM_OBJETIVOS]")[0].strip()
-            if "[BLOCO_TABELA]" in texto:
-                lines = texto.split("[BLOCO_TABELA]")[1].split("[FIM_TABELA]")[0].strip().split('\n')
-                for l in lines:
-                    if "||" in l and "Função" not in l:
-                        cols = [c.strip() for c in l.split("||")]
-                        
-                        # --- PROTEÇÃO PARA NÃO TRAVAR O PDF ---
-                        while len(cols) < 7: cols.append("-") 
-                        cols = cols[:7] 
-                        
-                        dados.append(cols)
-            
-            # SALVAR NA MEMÓRIA
-            st.session_state['plano_pronto'] = True
-            st.session_state['dados_pdf'] = dados
-            st.session_state['objs_pdf'] = objetivos
-            st.session_state['inputs_pdf'] = {'disciplina': disciplina, 'classe': classe, 'duracao': duracao, 'tema': tema, 'unidade': unidade, 'tipo_aula': tipo_aula, 'turma': turma}
-            st.rerun()
-
-        except Exception as e:
-            st.error(f"Erro: {e}")
-
-# --- MOSTRAR RESULTADO ---
-if st.session_state.get('plano_pronto'):
-    st.divider()
-    st.subheader("✅ Plano Gerado!")
+    st.markdown("<br>", unsafe_allow_html=True)
     
-    dados = st.session_state['dados_pdf']
-    objetivos = st.session_state['objs_pdf']
-    inputs = st.session_state['inputs_pdf']
-    
-    st.info(objetivos)
-    
-    if dados:
-        df = pd.DataFrame(dados, columns=["Tempo", "Função", "Conteúdo", "Prof", "Aluno", "Métodos", "Meios"])
-        st.dataframe(df, hide_index=True)
-        
-        c1, c2 = st.columns([1, 1])
-        with c1:
+    if st.button("🚀 ELABORAR PLANO (PDF)", type="primary"):
+        with st.spinner('O Metodólogo Virtual está a processar...'):
             try:
-                pdf_bytes = create_pdf(inputs, dados, objetivos)
-                st.download_button("📄 Baixar PDF Oficial", data=pdf_bytes, file_name=f"Plano_{inputs['disciplina']}.pdf", mime="application/pdf", type="primary")
-            except Exception as e:
-                st.error(f"Erro ao criar PDF: {e}")
-        
-        with c2:
-            if st.button("🔄 Gerar Novo Plano"):
-                st.session_state['plano_pronto'] = False
+                genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+                model = genai.GenerativeModel('models/gemini-2.5-flash')
+                
+                # --- PROMPT PEDAGÓGICO RIGOROSO ---
+                prompt = f"""
+                Aja como Pedagogo Especialista do MINEDH Moçambique.
+                Elabore um Plano de Aula para: {disciplina}, {classe}, Tema: {tema}.
+                Tipo de Aula: {tipo_aula}.
+
+                ESTRUTURA OBRIGATÓRIA DA TABELA (Use "||" para separar colunas):
+                Colunas: Tempo || Função Didática || Conteúdo || Actividades Professor || Actividades Aluno || Métodos || Meios
+
+                Gere a tabela com ESTAS 4 FUNÇÕES DIDÁTICAS (uma por linha):
+                1. Introdução e Motivação
+                2. Mediação e Assimilação
+                3. Domínio e Consolidação
+                4. Controlo e Avaliação
+
+                REGRAS DE PREENCHIMENTO:
+                - Coluna 'Tempo': Coloque APENAS os minutos (ex: 5', 10', 15'). Não escreva texto.
+                - Coluna 'Função Didática': Use exatamente os nomes listados acima.
+                - Conteúdo e Actividades: Detalhados e centrados no aluno.
+                - TPC: Deve aparecer na fase de Controlo e Avaliação (Marcação).
+
+                SAÍDA:
+                [BLOCO_OBJETIVOS]...[FIM_OBJETIVOS]
+                [BLOCO_TABELA]
+                ...linhas da tabela...
+                [FIM_TABELA]
+                """
+                
+                response = model.generate_content(prompt)
+                text = response.text
+                
+                objs = "..."
+                if "[BLOCO_OBJETIVOS]" in text:
+                    objs = text.split("[BLOCO_OBJETIVOS]")[1].split("[FIM_OBJETIVOS]")[0].strip()
+                
+                dados = []
+                if "[BLOCO_TABELA]" in text:
+                    lines = text.split("[BLOCO_TABELA]")[1].split("[FIM_TABELA]")[0].strip().split('\n')
+                    for l in lines:
+                        if "||" in l and "Função" not in l:
+                            cols = [c.strip() for c in l.split("||")]
+                            while len(cols) < 7: cols.append("-")
+                            dados.append(cols[:7])
+                
+                st.session_state['res_pdf'] = True
+                st.session_state['d'] = dados
+                st.session_state['o'] = objs
+                st.session_state['i'] = {'disciplina': disciplina, 'classe': classe, 'duracao': duracao, 'tema': tema, 'unidade': unidade, 'tipo_aula': tipo_aula, 'turma': turma}
                 st.rerun()
+                
+            except Exception as e:
+                st.error(f"Erro: {e}")
+
+# --- RESULTADOS ---
+if st.session_state.get('res_pdf'):
+    st.divider()
+    st.success("✅ Plano Elaborado!")
+    
+    pdf_data = create_pdf(st.session_state['i'], st.session_state['d'], st.session_state['o'])
+    st.download_button("📄 BAIXAR PDF (A4 HORIZONTAL)", data=pdf_data, file_name="Plano_Aula.pdf", mime="application/pdf", type="primary")
+    
+    if st.session_state['d']:
+        df = pd.DataFrame(st.session_state['d'], columns=["Tempo", "F. Didática", "Conteúdo", "Prof", "Aluno", "Métodos", "Meios"])
+        st.dataframe(df, hide_index=True)
+    
+    if st.button("🔄 Novo Plano"):
+        st.session_state['res_pdf'] = False
+        st.rerun()
