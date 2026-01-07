@@ -2,6 +2,7 @@ import streamlit as st
 import google.generativeai as genai
 from fpdf import FPDF
 import pandas as pd
+from PIL import Image
 
 # --- CONFIGURAÇÃO INICIAL ---
 st.set_page_config(page_title="SDEJT - Planos SNE", page_icon="🇲🇿", layout="wide")
@@ -13,6 +14,7 @@ st.markdown("""
     [data-testid="stSidebar"] { background-color: #262730; }
     .stTextInput > div > div > input, .stSelectbox > div > div > div, .stTextArea > div > div > textarea { color: #ffffff; }
     h1, h2, h3 { color: #FF4B4B !important; }
+    .stFileUploader { background-color: #1E1E1E; border-radius: 10px; padding: 10px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -55,14 +57,21 @@ def check_password():
 if not check_password():
     st.stop()
 
-# --- BARRA LATERAL ---
+# --- BARRA LATERAL (COM UPLOAD DE ARQUIVO) ---
 with st.sidebar:
     st.success(f"👤 Técnico: **{st.session_state['user_name']}**")
+    st.divider()
+    st.markdown("### 📚 Material de Apoio")
+    arquivo_enviado = st.file_uploader("Enviar PDF ou Foto do Livro para basear o plano", type=['pdf', 'png', 'jpg', 'jpeg'])
+    if arquivo_enviado:
+        st.info(f"Ficheiro '{arquivo_enviado.name}' carregado com sucesso!")
+    
+    st.divider()
     if st.button("Sair"):
         st.session_state["password_correct"] = False
         st.rerun()
 
-# --- CLASSE PDF ---
+# --- CLASSE PDF PARA EXPORTAÇÃO ---
 class PDF(FPDF):
     def header(self):
         self.set_font('Arial', 'B', 12)
@@ -139,7 +148,7 @@ def create_pdf(inputs, dados, obj_geral, obj_especificos):
     for row in dados: pdf.table_row(row, widths)
     return pdf.output(dest='S').encode('latin-1', 'replace')
 
-# --- LÓGICA DE GERAÇÃO ---
+# --- LÓGICA DE GERAÇÃO COM FICHEIROS ---
 def gerar_plano(instrucoes_adicionais=""):
     try:
         genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
@@ -147,25 +156,38 @@ def gerar_plano(instrucoes_adicionais=""):
         qtd_geral = "2 (Dois)" if "90" in duracao else "1 (Um)"
         qtd_especificos = "5 (Cinco)" if "90" in duracao else "3 (Três)"
         
-        contexto_ajuste = f"\n\nATENÇÃO: O usuário solicitou os seguintes ajustes no plano anterior: {instrucoes_adicionais}" if instrucoes_adicionais else ""
-
-        prompt = f"""
-        Aja como Pedagogo Especialista do SNE Moçambique.
-        Plano: {st.session_state['tmp_disciplina']}, {st.session_state['tmp_classe']}, Tema: {st.session_state['tmp_tema']}, Duração: {duracao}.{contexto_ajuste}
+        # Preparar partes do prompt para IA (Texto + Ficheiro se houver)
+        conteudo_prompt = [f"""Aja como Pedagogo Especialista do SNE Moçambique.
+        Plano: {st.session_state['tmp_disciplina']}, {st.session_state['tmp_classe']}, Tema: {st.session_state['tmp_tema']}, Duração: {duracao}.
+        Ajustes solicitados: {instrucoes_adicionais if instrucoes_adicionais else "Nenhum"}.
         
         REGRAS:
+        - Use as informações do arquivo enviado (se houver) para criar atividades baseadas no livro real.
         - Objetivo Geral: EXATAMENTE {qtd_geral}.
         - Objetivos Específicos: NO MÁXIMO {qtd_especificos}.
         - Tabela: 6 colunas (Tempo, Função, Act. Prof, Act. Aluno, Métodos, Meios).
         - Actividades: MUITO DETALHADAS.
         
-        SAÍDA: [BLOCO_GERAL]...[FIM_GERAL] [BLOCO_ESPECIFICOS]...[FIM_ESPECIFICOS] [BLOCO_TABELA]...[FIM_TABELA]
-        """
-        
-        try: model = genai.GenerativeModel('models/gemini-2.5-flash'); response = model.generate_content(prompt)
-        except: model = genai.GenerativeModel('models/gemini-1.5-flash'); response = model.generate_content(prompt)
+        SAÍDA: [BLOCO_GERAL]...[FIM_GERAL] [BLOCO_ESPECIFICOS]...[FIM_ESPECIFICOS] [BLOCO_TABELA]...[FIM_TABELA]"""]
 
+        # Adicionar ficheiro se existir
+        if arquivo_enviado:
+            if arquivo_enviado.type in ['image/png', 'image/jpeg', 'image/jpg']:
+                img = Image.open(arquivo_enviado)
+                conteudo_prompt.append(img)
+            else: # PDF
+                # Nota: Em Streamlit puro para ler PDF com Gemini Flash requer manipulação de bytes ou lib extra
+                # Vamos enviar os bytes como dados se o modelo suportar ou avisar
+                conteudo_prompt.append({"mime_type": "application/pdf", "data": arquivo_enviado.getvalue()})
+
+        # Escolha do modelo
+        try: model = genai.GenerativeModel('models/gemini-2.5-flash')
+        except: model = genai.GenerativeModel('models/gemini-1.5-flash')
+        
+        response = model.generate_content(conteudo_prompt)
         texto = response.text
+        
+        # Parse dos blocos
         obj_geral = texto.split("[BLOCO_GERAL]")[1].split("[FIM_GERAL]")[0].strip() if "[BLOCO_GERAL]" in texto else "Consultar Programa"
         obj_especificos = texto.split("[BLOCO_ESPECIFICOS]")[1].split("[FIM_ESPECIFICOS]")[0].strip() if "[BLOCO_ESPECIFICOS]" in texto else ""
         
@@ -182,9 +204,9 @@ def gerar_plano(instrucoes_adicionais=""):
         st.session_state['obj_geral'] = obj_geral
         st.session_state['obj_especificos'] = obj_especificos
         st.session_state['plano_pronto'] = True
-    except Exception as e: st.error(f"Erro: {e}")
+    except Exception as e: st.error(f"Erro na geração: {e}")
 
-# --- INTERFACE ---
+# --- INTERFACE PRINCIPAL ---
 st.title("🇲🇿 Elaboração de Planos de Aulas")
 
 col1, col2 = st.columns(2)
@@ -201,7 +223,7 @@ with col2:
 if st.button("🚀 Gerar Plano de Aula", type="primary"):
     gerar_plano()
 
-# --- RESULTADO E CAMPO DE MELHORIA ---
+# --- RESULTADO E REFINAMENTO ---
 if st.session_state.get('plano_pronto'):
     st.divider()
     st.subheader("📋 Pré-visualização do Plano")
@@ -211,21 +233,17 @@ if st.session_state.get('plano_pronto'):
         df = pd.DataFrame(st.session_state['dados_pdf'], columns=["Tempo", "F. Didática", "Prof", "Aluno", "Métodos", "Meios"])
         st.dataframe(df, hide_index=True, use_container_width=True)
 
-    # --- CAMPO DE REFINAMENTO (NOVO) ---
-    st.markdown("### 🛠️ Notou algum erro ou quer acrescentar algo?")
-    ajuste = st.text_area("Descreva o que a IA deve melhorar (ex: 'adicione mais exercícios', 'mude o método para experimental', 'corrija o tempo da introdução')", placeholder="Escreva aqui se precisar de ajustes...")
+    st.markdown("### 🛠️ Ajustar ou Melhorar")
+    ajuste = st.text_area("Ex: 'Use os exercícios da imagem que enviei', 'Melhore o tempo', etc.")
     
-    c1, c2, c3 = st.columns([1, 1, 1])
+    c1, c2, c3 = st.columns(3)
     with c1:
         if st.button("🔄 Aplicar Melhorias"):
-            if ajuste: gerar_plano(ajuste); st.rerun()
-            else: st.warning("Descreva o que deseja mudar.")
-    
+            gerar_plano(ajuste); st.rerun()
     with c2:
         inputs = {'unidade': unidade, 'tema': tema, 'turma': turma, 'duracao': duracao, 'tipo_aula': tipo_aula, 'disciplina': disciplina}
         pdf_bytes = create_pdf(inputs, st.session_state['dados_pdf'], st.session_state['obj_geral'], st.session_state['obj_especificos'])
         st.download_button("📄 Baixar PDF Final", data=pdf_bytes, file_name="Plano_Aula_SDEJT.pdf", mime="application/pdf", type="primary")
-
     with c3:
-        if st.button("🗑️ Iniciar Novo"):
+        if st.button("🗑️ Limpar Tudo"):
             st.session_state['plano_pronto'] = False; st.rerun()
