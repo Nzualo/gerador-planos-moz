@@ -82,41 +82,33 @@ class PDF(FPDF):
         return text
 
     def table_row(self, data, widths):
-        # Limpeza prévia dos dados da linha
         row_data = [self.clean_text(d) for d in data]
-        
-        # Calcular altura máxima da linha
         max_lines = 1
         for i, text in enumerate(row_data):
             self.set_font("Arial", size=8)
-            # Simula a escrita para contar linhas
+            # Simula a escrita para calcular altura
             lines = self.multi_cell(widths[i], 4, text, split_only=True)
             if len(lines) > max_lines: max_lines = len(lines)
         
         height = max_lines * 4 + 4
         
-        # Quebra de página se necessário
         if self.get_y() + height > 270:
             self.add_page()
             self.draw_table_header(widths)
 
         x_start = self.get_x()
         y_start = self.get_y()
-        
-        # Desenha o texto nas células
         for i, text in enumerate(row_data):
             self.set_xy(x_start, y_start)
             self.set_font("Arial", size=8)
             self.multi_cell(widths[i], 4, text, border=0, align='L')
             x_start += widths[i]
 
-        # Desenha as bordas (retângulos)
         self.set_xy(10, y_start)
         x_curr = 10
         for w in widths:
             self.rect(x_curr, y_start, w, height)
             x_curr += w
-            
         self.set_y(y_start + height)
 
     def draw_table_header(self, widths):
@@ -147,7 +139,6 @@ def create_pdf(inputs, dados, obj_geral, obj_especificos):
     pdf.cell(0, 7, f"Duração: {inputs['duracao']}", 0, 1)
     pdf.cell(100, 7, f"Tipo de Aula: {pdf.clean_text(inputs['tipo_aula'])}", 0, 0)
     pdf.cell(0, 7, f"Nº Alunos: M_____  F_____  Total:_____", 0, 1)
-    
     pdf.line(10, pdf.get_y()+2, 200, pdf.get_y()+2)
     pdf.ln(5)
 
@@ -155,8 +146,7 @@ def create_pdf(inputs, dados, obj_geral, obj_especificos):
     pdf.set_font("Arial", "B", 10)
     pdf.cell(40, 6, "OBJETIVO GERAL:", 0, 0)
     pdf.set_font("Arial", size=10)
-    curr_y = pdf.get_y()
-    pdf.set_xy(50, curr_y)
+    pdf.set_xy(50, pdf.get_y())
     pdf.multi_cell(0, 6, pdf.clean_text(obj_geral))
     pdf.ln(2)
 
@@ -166,8 +156,7 @@ def create_pdf(inputs, dados, obj_geral, obj_especificos):
     pdf.multi_cell(0, 5, pdf.clean_text(obj_especificos))
     pdf.ln(5)
 
-    # Tabela (Larguras ajustadas para evitar sobreposição)
-    # Tempo, F.Didatica, Conteudo, Prof, Aluno, Metodos, Meios
+    # Tabela
     widths = [12, 35, 35, 35, 30, 20, 23] 
     pdf.draw_table_header(widths)
     for row in dados:
@@ -195,42 +184,50 @@ with col2:
     tema = st.text_input("Tema", placeholder="Ex: Vogais")
 
 # --- GERAÇÃO IA ---
-if st.button("🚀 Gerar Plano Completo", type="primary"):
-    with st.spinner('A organizar as colunas e alinhar conteúdos...'):
+if st.button("🚀 Gerar Plano Detalhado", type="primary"):
+    with st.spinner('A elaborar o plano com rigor pedagógico...'):
         try:
             genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-            model = genai.GenerativeModel('models/gemini-2.5-flash') 
+            
+            # Use o modelo 1.5-flash para evitar erros de cota (429)
+            model = genai.GenerativeModel('models/gemini-1.5-flash') 
+            
+            # --- LÓGICA DE DURAÇÃO ---
+            if "90" in duracao:
+                qtd_geral = 2
+                qtd_especificos = 5
+            else:
+                qtd_geral = 1
+                qtd_especificos = 3
             
             prompt = f"""
             Aja como Pedagogo Especialista do SNE Moçambique.
-            Plano: {disciplina}, {classe}, Tema: {tema}.
+            Plano: {disciplina}, {classe}, Tema: {tema}, Duração: {duracao}.
             
-            REGRAS DE FORMATAÇÃO ESTRITAS (PARA NÃO QUEBRAR A TABELA):
-            1. A tabela TEM QUE TER 7 COLUNAS PREENCHIDAS para cada linha.
-            2. NENHUMA COLUNA PODE FICAR VAZIA. Se não houver texto, escreva "-".
-            3. Use o separador "||" com espaços ao redor.
+            REGRAS DE QUANTIDADE DE OBJETIVOS (RIGOROSO):
+            - Como a aula é de {duracao}, você DEVE gerar:
+              * Objetivo Geral: Exatamente {qtd_geral}.
+              * Objetivos Específicos: No máximo {qtd_especificos}.
             
-            COLUNAS OBRIGATÓRIAS:
-            Tempo || Função Didática || Conteúdo || Actividade Professor || Actividade Aluno || Métodos || Meios
-
-            AS 4 FUNÇÕES DIDÁTICAS OBRIGATÓRIAS (UMA EM CADA LINHA):
+            REGRAS DE CONTEÚDO:
+            1. Atividades do Professor e Aluno devem ser BEM DETALHADAS. 
+               - Não escreva apenas "Explica". Escreva "Explica detalhadamente o conceito de X, dando exemplos do dia-a-dia como Y...".
+               - O texto deve ser descritivo e completo.
+            2. Tabela com 7 colunas preenchidas.
+            3. Separador "||".
+            
+            AS 4 FUNÇÕES DIDÁTICAS OBRIGATÓRIAS:
             1. Introdução e Motivação
             2. Mediação e Assimilação
             3. Domínio e Consolidação
             4. Controlo e Avaliação
 
-            EXEMPLO DE LINHA PERFEITA (SIGA ESTE PADRÃO):
-            5 || 1. Introdução e Motivação || Controle de Presenças || Saúda e marca faltas || Respondem à chamada || Elaboração Conjunta || Livro de Ponto
-
-            OBJETIVOS:
-            - Verbos no infinitivo.
-            - Alinhados ao programa de ensino moçambicano.
-
-            SAÍDA:
+            SAÍDA ESPERADA:
             [BLOCO_GERAL]...[FIM_GERAL]
             [BLOCO_ESPECIFICOS]...[FIM_ESPECIFICOS]
             [BLOCO_TABELA]
-            ... (Insira as 4 linhas aqui seguindo o exemplo acima)
+            Tempo || Função || Conteúdo || Actividade Professor (Detalhada) || Actividade Aluno (Detalhada) || Métodos || Meios
+            ...
             [FIM_TABELA]
             """
             
@@ -245,7 +242,7 @@ if st.button("🚀 Gerar Plano Completo", type="primary"):
                 obj_geral = texto.split("[BLOCO_GERAL]")[1].split("[FIM_GERAL]")[0].strip()
             if "[BLOCO_ESPECIFICOS]" in texto:
                 obj_especificos = texto.split("[BLOCO_ESPECIFICOS]")[1].split("[FIM_ESPECIFICOS]")[0].strip()
-            elif "[BLOCO_OBJETIVOS]" in texto: # Fallback
+            elif "[BLOCO_OBJETIVOS]" in texto:
                 obj_especificos = texto.split("[BLOCO_OBJETIVOS]")[1].split("[FIM_OBJETIVOS]")[0].strip()
 
             if "[BLOCO_TABELA]" in texto:
@@ -253,15 +250,8 @@ if st.button("🚀 Gerar Plano Completo", type="primary"):
                 lines = block.split('\n')
                 for l in lines:
                     if "||" in l and "Função" not in l:
-                        # Split e limpeza de cada coluna
                         cols = [c.strip() for c in l.split("||")]
-                        
-                        # GARANTIA DE 7 COLUNAS
-                        # Se a IA gerar menos colunas, preenchemos com "-" para não encavalar
-                        while len(cols) < 7: 
-                            cols.append("-")
-                        
-                        # Se a IA gerar mais, cortamos (mas o prompt deve evitar isso)
+                        while len(cols) < 7: cols.append("-")
                         dados.append(cols[:7])
             
             st.session_state['plano_pronto'] = True
@@ -277,7 +267,7 @@ if st.button("🚀 Gerar Plano Completo", type="primary"):
 # --- RESULTADO ---
 if st.session_state.get('plano_pronto'):
     st.divider()
-    st.subheader("✅ Plano Gerado e Alinhado")
+    st.subheader("✅ Plano Detalhado Gerado")
     
     dados = st.session_state['dados_pdf']
     obj_geral = st.session_state['obj_geral']
@@ -288,7 +278,6 @@ if st.session_state.get('plano_pronto'):
     st.info(obj_especificos)
     
     if dados:
-        # Mostra tabela na tela para conferência
         df = pd.DataFrame(dados, columns=["Tempo", "F. Didática", "Conteúdo", "Prof", "Aluno", "Métodos", "Meios"])
         st.dataframe(df, hide_index=True, use_container_width=True)
         
