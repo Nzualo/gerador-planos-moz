@@ -16,7 +16,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- FUNÇÃO DE LOGIN ---
+# --- FUNÇÃO DE LOGIN E CONTACTO ---
 def check_password():
     if st.session_state.get("password_correct", False):
         return True
@@ -26,6 +26,8 @@ def check_password():
     st.divider()
     
     col1, col2 = st.columns([1, 1])
+    
+    # Coluna de Login
     with col1:
         st.info("🔐 Acesso Restrito")
         usuario = st.text_input("Usuário")
@@ -40,9 +42,33 @@ def check_password():
                     st.error("Senha incorreta.")
             else:
                 st.error("Usuário desconhecido.")
+
+    # Coluna de Contacto (WhatsApp)
     with col2:
-        st.warning("⚠️ Suporte")
-        st.write("Contacte a Repartição de Educação Geral.")
+        st.warning("⚠️ Suporte / Aquisição de Acesso")
+        st.markdown("**Precisa de um usuário e senha?**")
+        st.write("Fale directamente com o Administrador via WhatsApp:")
+        
+        meu_numero = "258867926665"
+        mensagem = "Saudações. Gostaria de solicitar acesso ao Gerador de Planos de Aula (SDEJT)."
+        link_zap = f"https://wa.me/{meu_numero}?text={mensagem.replace(' ', '%20')}"
+        
+        st.markdown(f'''
+            <a href="{link_zap}" target="_blank" style="text-decoration: none;">
+                <button style="
+                    background-color:#25D366; 
+                    color:white; 
+                    border:none; 
+                    padding:15px 25px; 
+                    border-radius:8px; 
+                    width:100%; 
+                    cursor:pointer;
+                    font-size: 16px;
+                    font-weight:bold;">
+                    📱 Falar no WhatsApp ({meu_numero})
+                </button>
+            </a>
+            ''', unsafe_allow_html=True)
     return False
 
 if not check_password():
@@ -111,7 +137,7 @@ class PDF(FPDF):
         self.set_y(y_start + height)
 
     def draw_table_header(self, widths):
-        # --- CABEÇALHO ATUALIZADO (SEM CONTEÚDO) ---
+        # Cabeçalho sem a coluna Conteúdo
         headers = ["TEMPO", "F. DIDÁTICA", "ACTIV. PROFESSOR", "ACTIV. ALUNO", "MÉTODOS", "MEIOS"]
         self.set_font("Arial", "B", 7)
         self.set_fill_color(220, 220, 220)
@@ -156,9 +182,8 @@ def create_pdf(inputs, dados, obj_geral, obj_especificos):
     pdf.multi_cell(0, 5, pdf.clean_text(obj_especificos))
     pdf.ln(5)
 
-    # --- TABELA COM 6 COLUNAS (LARGURAS AJUSTADAS) ---
-    # Removida coluna Conteúdo (35). Espaço redistribuído para Atividades.
-    # Tempo(12), F.Didatica(40), Prof(45), Aluno(45), Metodos(23), Meios(25)
+    # Tabela (6 Colunas)
+    # Larguras: Tempo(12), F.Didatica(40), Prof(45), Aluno(45), Metodos(23), Meios(25)
     widths = [12, 40, 45, 45, 23, 25] 
     pdf.draw_table_header(widths)
     for row in dados:
@@ -169,7 +194,7 @@ def create_pdf(inputs, dados, obj_geral, obj_especificos):
 st.title("🇲🇿 Elaboração de Planos de Aulas")
 
 if "GOOGLE_API_KEY" not in st.secrets:
-    st.error("⚠️ ERRO: Configure os Secrets!")
+    st.error("⚠️ ERRO: Configure a Chave de API nos Secrets!")
     st.stop()
 
 # --- INPUTS ---
@@ -186,11 +211,12 @@ with col2:
     tema = st.text_input("Tema", placeholder="Ex: Vogais")
 
 # --- GERAÇÃO IA ---
-if st.button("🚀 Gerar Plano (Sem Coluna Conteúdo)", type="primary"):
-    with st.spinner('A usar Gemini 2.5 para detalhar atividades...'):
+if st.button("🚀 Gerar Plano de Aula", type="primary"):
+    with st.spinner('A processar o plano com Inteligência Artificial...'):
         try:
             genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
             
+            # Lógica de Quantidade de Objetivos
             if "90" in duracao:
                 qtd_geral = "EXATAMENTE 2 (Dois)"
                 qtd_especificos = "NO MÁXIMO 5 (Cinco)"
@@ -210,7 +236,7 @@ if st.button("🚀 Gerar Plano (Sem Coluna Conteúdo)", type="primary"):
             1. A tabela NÃO DEVE ter a coluna Conteúdo.
             2. Deve ter EXATAMENTE 6 COLUNAS.
             3. Separador "||".
-            4. As atividades do Professor e Aluno devem ser MUITO DETALHADAS.
+            4. As atividades do Professor e Aluno devem ser MUITO DETALHADAS e descritivas.
             
             Estrutura da Tabela:
             Tempo || Função Didática || Actividade Professor || Actividade Aluno || Métodos || Meios
@@ -225,17 +251,17 @@ if st.button("🚀 Gerar Plano (Sem Coluna Conteúdo)", type="primary"):
             [BLOCO_GERAL]...[FIM_GERAL]
             [BLOCO_ESPECIFICOS]...[FIM_ESPECIFICOS]
             [BLOCO_TABELA]
-            5 || 1. Introdução e Motivação || O professor faz a chamada e corrige o TPC anterior detalhadamente... || Os alunos respondem e apresentam os cadernos... || Elaboração Conjunta || Livro
+            5 || 1. Introdução e Motivação || O professor faz a chamada... || Os alunos respondem... || Elaboração Conjunta || Livro
             ...
             [FIM_TABELA]
             """
             
-            # Tenta Gemini 2.5, fallback para 1.5
+            # Tenta usar o modelo mais avançado, com fallback automático
             try:
                 model = genai.GenerativeModel('models/gemini-2.5-flash')
                 response = model.generate_content(prompt)
-            except Exception as e:
-                st.warning(f"⚠️ Gemini 2.5 ocupado. Redirecionando para 1.5 Flash.")
+            except Exception:
+                # Silenciosamente muda para o modelo estável se o principal falhar
                 model = genai.GenerativeModel('models/gemini-1.5-flash')
                 response = model.generate_content(prompt)
 
@@ -259,7 +285,7 @@ if st.button("🚀 Gerar Plano (Sem Coluna Conteúdo)", type="primary"):
                     if "||" in l and "Função" not in l:
                         cols = [c.strip() for c in l.split("||")]
                         
-                        # GARANTIR 6 COLUNAS (Sem Conteúdo)
+                        # Garantir 6 colunas (Sem Conteúdo)
                         while len(cols) < 6: cols.append("-")
                         dados.append(cols[:6])
             
@@ -271,12 +297,12 @@ if st.button("🚀 Gerar Plano (Sem Coluna Conteúdo)", type="primary"):
             st.rerun()
 
         except Exception as e:
-            st.error(f"Erro Crítico: {e}")
+            st.error(f"Ocorreu um erro no sistema: {e}")
 
 # --- RESULTADO ---
 if st.session_state.get('plano_pronto'):
     st.divider()
-    st.subheader("✅ Plano Gerado (Formato SNE Atualizado)")
+    st.subheader("✅ Plano Gerado com Sucesso")
     
     dados = st.session_state['dados_pdf']
     obj_geral = st.session_state['obj_geral']
@@ -287,7 +313,6 @@ if st.session_state.get('plano_pronto'):
     st.info(obj_especificos)
     
     if dados:
-        # Colunas atualizadas para visualização
         df = pd.DataFrame(dados, columns=["Tempo", "F. Didática", "Prof", "Aluno", "Métodos", "Meios"])
         st.dataframe(df, hide_index=True, use_container_width=True)
         
@@ -299,6 +324,6 @@ if st.session_state.get('plano_pronto'):
             except Exception as e:
                 st.error(f"Erro ao criar PDF: {e}")
         with c2:
-            if st.button("🔄 Novo Plano"):
+            if st.button("🔄 Elaborar Novo Plano"):
                 st.session_state['plano_pronto'] = False
                 st.rerun()
