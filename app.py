@@ -4,126 +4,94 @@ from fpdf import FPDF
 import pandas as pd
 import time
 
-# --- CONFIGURAÇÃO INICIAL ---
-st.set_page_config(page_title="SDEJT Inhassoro", page_icon="🇲🇿", layout="wide")
+# --- 1. CONFIGURAÇÃO (PRIMEIRA LINHA) ---
+st.set_page_config(page_title="SDEJT Planos", page_icon="🇲🇿", layout="wide")
 
-# --- ESTILO VISUAL DARK (MODO ESCURO - SNE) ---
+# --- 2. ESTILO VISUAL (CORRIGIDO PARA CELULAR) ---
 st.markdown("""
     <style>
-    /* Fundo Principal Escuro */
+    /* Força o fundo escuro e texto claro */
     .stApp {
         background-color: #0E1117;
-        color: #E0E0E0;
+        color: #FFFFFF;
     }
     
-    /* Inputs (Caixas de texto) */
-    .stTextInput > div > div > input {
-        background-color: #262730;
-        color: white;
-        border: 1px solid #4A4A4A;
-    }
-    .stSelectbox > div > div > div {
-        background-color: #262730;
-        color: white;
+    /* Inputs visíveis */
+    .stTextInput input {
+        color: white !important;
     }
     
-    /* Títulos em Verde Oficial */
-    h1, h2, h3, h4 {
-        color: #4CAF50 !important; /* Verde Bandeira */
-        font-family: 'Times New Roman', serif;
-    }
-    
-    /* Botões */
-    div.stButton > button:first-child {
-        background-color: #D32F2F; /* Vermelho Bandeira */
-        color: white;
+    /* Botões grandes e visíveis */
+    div.stButton > button {
+        width: 100%;
+        border-radius: 8px;
         font-weight: bold;
-        border: none;
-        border-radius: 4px;
-        text-transform: uppercase;
-        font-family: 'Times New Roman', serif;
-    }
-    div.stButton > button:first-child:hover {
-        background-color: #B71C1C;
-        border: 1px solid white;
-    }
-
-    /* Sidebar */
-    section[data-testid="stSidebar"] {
-        background-color: #1A1C24;
-        border-right: 1px solid #333;
+        height: 50px;
     }
     
+    /* Esconde menu padrão */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     </style>
     """, unsafe_allow_html=True)
 
-# --- FUNÇÃO DE AUTENTICAÇÃO ---
+# --- 3. FUNÇÃO DE LOGIN SEGURA ---
 def check_password():
+    # Se já estiver logado, passa direto
     if st.session_state.get("password_correct", False):
         return True
 
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        with st.container(border=True):
-            st.markdown("<h2 style='text-align: center; font-family: Times New Roman;'>🇲🇿 MINEDH / SDEJT</h2>", unsafe_allow_html=True)
-            st.markdown("<p style='text-align: center; color: #aaa; font-family: Times New Roman;'>Sistema de Planificação de Aulas - Inhassoro</p>", unsafe_allow_html=True)
-            st.divider()
-            
-            st.info("🔐 Autenticação Obrigatória")
-            usuario = st.text_input("Nome de Utilizador")
-            senha = st.text_input("Palavra-passe", type="password")
-            
-            if st.button("ENTRAR NO SISTEMA", type="primary", use_container_width=True):
-                if "passwords" in st.secrets and usuario in st.secrets["passwords"]:
-                    if st.secrets["passwords"][usuario] == senha:
-                        st.session_state["password_correct"] = True
-                        st.session_state["user_name"] = usuario
-                        st.rerun()
-                    else:
-                        st.error("Palavra-passe incorreta.")
+    # LAYOUT SIMPLIFICADO (SEM COLUNAS PARA NÃO TRAVAR NO CELULAR)
+    st.markdown("<br>", unsafe_allow_html=True) # Espaço
+    
+    # Caixa de Login
+    with st.container(border=True):
+        st.markdown("<h2 style='text-align: center; color: #4CAF50;'>🇲🇿 MINEDH / SDEJT</h2>", unsafe_allow_html=True)
+        st.info("🔐 Área Restrita - Inhassoro")
+        
+        usuario = st.text_input("Usuário")
+        senha = st.text_input("Senha", type="password")
+        
+        if st.button("ENTRAR", type="primary"):
+            if "passwords" in st.secrets and usuario in st.secrets["passwords"]:
+                if st.secrets["passwords"][usuario] == senha:
+                    st.session_state["password_correct"] = True
+                    st.session_state["user_name"] = usuario
+                    st.rerun()
                 else:
-                    st.error("Utilizador não registado.")
+                    st.error("Senha incorreta.")
+            else:
+                st.error("Usuário não encontrado.")
 
-            st.divider()
+        st.markdown("---")
+        # Botão WhatsApp
+        link_zap = "https://wa.me/258867926665?text=Ola%20Tecnico%20Nzualo,%20peço%20acesso%20ao%20sistema."
+        st.markdown(f'''
+            <a href="{link_zap}" target="_blank">
+                <button style="
+                    background-color: #25D366; color: white; border: none; 
+                    padding: 10px; border-radius: 5px; width: 100%; font-weight: bold;">
+                    📱 Pedir Senha no WhatsApp
+                </button>
+            </a>
+            ''', unsafe_allow_html=True)
             
-            meu_numero = "258867926665"
-            mensagem = "Saudações Técnico Nzualo. Sou professor e solicito credenciais para o Sistema de Planos."
-            link_zap = f"https://wa.me/{meu_numero}?text={mensagem.replace(' ', '%20')}"
-            
-            st.markdown(f'''
-                <a href="{link_zap}" target="_blank" style="text-decoration: none;">
-                    <button style="
-                        background-color: #25D366; 
-                        color: white; 
-                        border: none; 
-                        padding: 10px; 
-                        border-radius: 5px; 
-                        width: 100%; 
-                        cursor: pointer; 
-                        font-weight: bold;
-                        font-family: Times New Roman;">
-                        📱 Contactar Administrador (WhatsApp)
-                    </button>
-                </a>
-                ''', unsafe_allow_html=True)
     return False
 
+# Bloqueia se não estiver logado
 if not check_password():
     st.stop()
 
-# --- SIDEBAR ---
+# --- 4. BARRA LATERAL ---
 with st.sidebar:
-    st.success(f"👤 Professor(a): **{st.session_state['user_name']}**")
-    if st.button("Terminar Sessão"):
+    st.success(f"👤 Olá, {st.session_state.get('user_name', 'Professor')}")
+    if st.button("Sair / Logout"):
         st.session_state["password_correct"] = False
         st.rerun()
 
-# --- CLASSE PDF (TIMES NEW ROMAN - HORIZONTAL) ---
+# --- 5. CLASSE PDF (A4 HORIZONTAL) ---
 class PDF(FPDF):
     def header(self):
-        # Times New Roman (Code: 'Times')
         self.set_font('Times', 'B', 12)
         self.cell(0, 5, 'REPÚBLICA DE MOÇAMBIQUE', 0, 1, 'C')
         self.set_font('Times', 'B', 11)
@@ -132,4 +100,166 @@ class PDF(FPDF):
         self.ln(5)
         self.set_font('Times', 'B', 14)
         self.cell(0, 10, 'PLANO DE LIÇÃO', 0, 1, 'C')
-        self.ln
+        self.ln(2)
+
+    def footer(self):
+        self.set_y(-15)
+        self.set_font('Times', 'I', 8)
+        self.cell(0, 10, 'Processado por IA - SDEJT Inhassoro', 0, 0, 'C')
+
+    def table_row(self, data, widths):
+        max_lines = 1
+        for i, text in enumerate(data):
+            self.set_font("Times", size=10)
+            texto = str(text) if text else ""
+            lines = self.multi_cell(widths[i], 4, texto, split_only=True)
+            max_lines = max(max_lines, len(lines))
+        
+        height = max_lines * 4 + 4
+        
+        # Quebra de página (Altura Paisagem ~190mm)
+        if self.get_y() + height > 180:
+            self.add_page(orientation='L')
+            self.create_headers(widths)
+            
+        x_start = self.get_x()
+        y_start = self.get_y()
+        
+        for i, text in enumerate(data):
+            self.set_xy(x_start, y_start)
+            texto = str(text) if text else ""
+            self.multi_cell(widths[i], 4, texto, border=0)
+            x_start += widths[i]
+            
+        self.set_xy(10, y_start)
+        x_curr = 10
+        for w in widths:
+            self.rect(x_curr, y_start, w, height)
+            x_curr += w
+        self.set_y(y_start + height)
+
+    def create_headers(self, widths):
+        headers = ["TEMPO", "F. DIDÁTICA", "CONTEÚDOS", "ACTIV. PROF", "ACTIV. ALUNO", "MÉTODOS", "MEIOS"]
+        self.set_font("Times", "B", 9)
+        self.set_fill_color(220, 220, 220)
+        for i, h in enumerate(headers):
+            self.cell(widths[i], 6, h, 1, 0, 'C', True)
+        self.ln()
+
+def create_pdf(inputs, dados, objetivos):
+    pdf = PDF()
+    pdf.set_auto_page_break(auto=False)
+    # PÁGINA HORIZONTAL
+    pdf.add_page(orientation='L')
+    
+    pdf.set_font("Times", size=12)
+    # Cabeçalho Largo
+    pdf.cell(160, 7, f"Escola: _______________________________________________________", 0, 0)
+    pdf.cell(0, 7, f"Data: ____/____/2026", 0, 1)
+    pdf.cell(0, 7, f"Unidade: {inputs['unidade']}", 0, 1)
+    
+    pdf.set_font("Times", "B", 12)
+    pdf.cell(0, 7, f"Tema: {inputs['tema']}", 0, 1)
+    pdf.set_font("Times", size=12)
+    
+    pdf.cell(110, 7, f"Professor: ___________________________", 0, 0)
+    pdf.cell(40, 7, f"Turma: {inputs['turma']}", 0, 0)
+    pdf.cell(0, 7, f"Duração: {inputs['duracao']}", 0, 1)
+    
+    pdf.cell(110, 7, f"Tipo de Aula: {inputs['tipo_aula']}", 0, 0)
+    pdf.cell(0, 7, f"Alunos: M_____  F_____  Total:_____", 0, 1)
+    pdf.line(10, pdf.get_y()+2, 285, pdf.get_y()+2)
+    pdf.ln(5)
+
+    pdf.set_font("Times", "B", 12)
+    pdf.cell(0, 6, "OBJECTIVOS:", 0, 1)
+    pdf.set_font("Times", size=12)
+    pdf.multi_cell(0, 5, objetivos)
+    pdf.ln(5)
+
+    # Tabela (Largura Total ~275mm)
+    widths = [15, 35, 55, 55, 55, 30, 32]
+    pdf.create_headers(widths)
+    
+    for row in dados:
+        pdf.table_row(row, widths)
+        
+    return pdf.output(dest='S').encode('latin-1', 'ignore')
+
+# --- 6. APLICATIVO PRINCIPAL ---
+st.title("🇲🇿 Elaboração de Planos (SNE)")
+st.write("Preencha os dados abaixo:")
+
+if "GOOGLE_API_KEY" not in st.secrets:
+    st.error("⚠️ ERRO: Configure a Chave API nos Secrets.")
+    st.stop()
+
+# Formulário
+with st.container(border=True):
+    c1, c2 = st.columns(2)
+    with c1:
+        disciplina = st.text_input("Disciplina", "Língua Portuguesa")
+        classe = st.selectbox("Classe", ["1ª", "2ª", "3ª", "4ª", "5ª", "6ª", "7ª", "8ª", "9ª", "10ª", "11ª", "12ª"])
+        unidade = st.text_input("Unidade", placeholder="Ex: Textos Normativos")
+        tipo_aula = st.selectbox("Tipo de Aula", [
+            "Conteúdo Novo", "Continuação", "Exercícios de Aplicação", 
+            "Revisão", "Avaliação", "Correção"
+        ])
+    with c2:
+        duracao = st.selectbox("Duração", ["45 Min", "90 Min"])
+        turma = st.text_input("Turma", placeholder="A")
+        tema = st.text_input("Tema", placeholder="Tema da aula...")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    if st.button("🚀 GERAR PLANO PDF", type="primary"):
+        with st.spinner('A processar...'):
+            try:
+                genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+                model = genai.GenerativeModel('models/gemini-2.5-flash')
+                
+                prompt = f"""
+                Pedagogo do SNE Moçambique.
+                Plano: {disciplina}, {classe}, Tema: {tema}, Tipo: {tipo_aula}.
+                Regras: Centrado no aluno. TPC (Correção/Marcação).
+                Saída: [BLOCO_OBJETIVOS]...[FIM] [BLOCO_TABELA]...[FIM] (Separação ||)
+                """
+                response = model.generate_content(prompt)
+                text = response.text
+                
+                objs = text.split("[BLOCO_OBJETIVOS]")[1].split("[FIM]")[0].strip() if "[BLOCO_OBJETIVOS]" in text else "..."
+                raw_table = text.split("[BLOCO_TABELA]")[1].split("[FIM]")[0].strip().split('\n') if "[BLOCO_TABELA]" in text else []
+                
+                dados = []
+                for l in raw_table:
+                    if "||" in l and "Função" not in l:
+                        cols = [c.strip() for c in l.split("||")]
+                        while len(cols) < 7: cols.append("-")
+                        dados.append(cols[:7]) # Garante 7 colunas
+                
+                # Salvar na sessão
+                st.session_state['res_pdf'] = True
+                st.session_state['d'] = dados
+                st.session_state['o'] = objs
+                st.session_state['i'] = {'disciplina': disciplina, 'classe': classe, 'duracao': duracao, 'tema': tema, 'unidade': unidade, 'tipo_aula': tipo_aula, 'turma': turma}
+                st.rerun()
+            except Exception as e:
+                st.error(f"Erro: {e}")
+
+# Resultados
+if st.session_state.get('res_pdf'):
+    st.divider()
+    st.success("✅ Plano Pronto!")
+    
+    # Botão de Download
+    pdf_data = create_pdf(st.session_state['i'], st.session_state['d'], st.session_state['o'])
+    st.download_button("📄 BAIXAR PDF (HORIZONTAL)", data=pdf_data, file_name="Plano.pdf", mime="application/pdf", type="primary")
+    
+    # Prévia
+    if st.session_state['d']:
+        df = pd.DataFrame(st.session_state['d'], columns=["Min", "F. Didática", "Conteúdo", "Prof", "Aluno", "Métodos", "Meios"])
+        st.dataframe(df, hide_index=True)
+    
+    if st.button("🔄 Novo Plano"):
+        st.session_state['res_pdf'] = False
+        st.rerun()
