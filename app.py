@@ -4,51 +4,46 @@ from fpdf import FPDF
 import pandas as pd
 import time
 
-# --- 1. CONFIGURAÇÃO (PRIMEIRA LINHA) ---
-st.set_page_config(page_title="SDEJT Planos", page_icon="🇲🇿", layout="wide")
+# --- 1. CONFIGURAÇÃO ---
+st.set_page_config(page_title="SDEJT Inhassoro", page_icon="🇲🇿", layout="wide")
 
-# --- 2. ESTILO VISUAL (CORRIGIDO PARA CELULAR) ---
+# --- 2. ESTILO VISUAL (DARK MODE / MÓVEL) ---
 st.markdown("""
     <style>
-    /* Força o fundo escuro e texto claro */
     .stApp {
         background-color: #0E1117;
         color: #FFFFFF;
     }
-    
-    /* Inputs visíveis */
     .stTextInput input {
         color: white !important;
     }
-    
-    /* Botões grandes e visíveis */
     div.stButton > button {
         width: 100%;
         border-radius: 8px;
         font-weight: bold;
         height: 50px;
+        text-transform: uppercase;
     }
-    
-    /* Esconde menu padrão */
+    /* Esconde menus desnecessários */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     </style>
     """, unsafe_allow_html=True)
 
-# --- 3. FUNÇÃO DE LOGIN SEGURA ---
+# --- 3. FUNÇÃO DE LOGIN (TÍTULOS CORRIGIDOS) ---
 def check_password():
-    # Se já estiver logado, passa direto
     if st.session_state.get("password_correct", False):
         return True
 
-    # LAYOUT SIMPLIFICADO (SEM COLUNAS PARA NÃO TRAVAR NO CELULAR)
-    st.markdown("<br>", unsafe_allow_html=True) # Espaço
+    st.markdown("<br>", unsafe_allow_html=True)
     
-    # Caixa de Login
     with st.container(border=True):
-        st.markdown("<h2 style='text-align: center; color: #4CAF50;'>🇲🇿 MINEDH / SDEJT</h2>", unsafe_allow_html=True)
-        st.info("🔐 Área Restrita - Inhassoro")
+        # TÍTULO CORRIGIDO AQUI
+        st.markdown("<h3 style='text-align: center; color: #4CAF50;'>🇲🇿 SDEJT - INHASSORO</h3>", unsafe_allow_html=True)
+        st.markdown("<h5 style='text-align: center; color: #ccc;'>Serviço Distrital de Educação, Juventude e Tecnologia</h5>", unsafe_allow_html=True)
+        st.divider()
         
+        st.info("🔐 Área Restrita")
         usuario = st.text_input("Usuário")
         senha = st.text_input("Senha", type="password")
         
@@ -71,14 +66,12 @@ def check_password():
                 <button style="
                     background-color: #25D366; color: white; border: none; 
                     padding: 10px; border-radius: 5px; width: 100%; font-weight: bold;">
-                    📱 Pedir Senha no WhatsApp
+                    📱 Falar com Administrador
                 </button>
             </a>
             ''', unsafe_allow_html=True)
-            
     return False
 
-# Bloqueia se não estiver logado
 if not check_password():
     st.stop()
 
@@ -105,7 +98,7 @@ class PDF(FPDF):
     def footer(self):
         self.set_y(-15)
         self.set_font('Times', 'I', 8)
-        self.cell(0, 10, 'Processado por IA - SDEJT Inhassoro', 0, 0, 'C')
+        self.cell(0, 10, 'SDEJT Inhassoro - Processado por IA', 0, 0, 'C')
 
     def table_row(self, data, widths):
         max_lines = 1
@@ -117,7 +110,6 @@ class PDF(FPDF):
         
         height = max_lines * 4 + 4
         
-        # Quebra de página (Altura Paisagem ~190mm)
         if self.get_y() + height > 180:
             self.add_page(orientation='L')
             self.create_headers(widths)
@@ -149,11 +141,10 @@ class PDF(FPDF):
 def create_pdf(inputs, dados, objetivos):
     pdf = PDF()
     pdf.set_auto_page_break(auto=False)
-    # PÁGINA HORIZONTAL
-    pdf.add_page(orientation='L')
+    pdf.add_page(orientation='L') # Paisagem
     
     pdf.set_font("Times", size=12)
-    # Cabeçalho Largo
+    # Cabeçalho
     pdf.cell(160, 7, f"Escola: _______________________________________________________", 0, 0)
     pdf.cell(0, 7, f"Data: ____/____/2026", 0, 1)
     pdf.cell(0, 7, f"Unidade: {inputs['unidade']}", 0, 1)
@@ -177,7 +168,6 @@ def create_pdf(inputs, dados, objetivos):
     pdf.multi_cell(0, 5, objetivos)
     pdf.ln(5)
 
-    # Tabela (Largura Total ~275mm)
     widths = [15, 35, 55, 55, 55, 30, 32]
     pdf.create_headers(widths)
     
@@ -187,8 +177,10 @@ def create_pdf(inputs, dados, objetivos):
     return pdf.output(dest='S').encode('latin-1', 'ignore')
 
 # --- 6. APLICATIVO PRINCIPAL ---
-st.title("🇲🇿 Elaboração de Planos (SNE)")
-st.write("Preencha os dados abaixo:")
+# TÍTULO CORRIGIDO AQUI
+st.title("🇲🇿 Elaboração de Planos de Aulas")
+st.markdown("##### Serviço Distrital de Educação, Juventude e Tecnologia - Inhassoro")
+st.divider()
 
 if "GOOGLE_API_KEY" not in st.secrets:
     st.error("⚠️ ERRO: Configure a Chave API nos Secrets.")
@@ -219,7 +211,7 @@ with st.container(border=True):
                 model = genai.GenerativeModel('models/gemini-2.5-flash')
                 
                 prompt = f"""
-                Pedagogo do SNE Moçambique.
+                Pedagogo do MINEDH Moçambique.
                 Plano: {disciplina}, {classe}, Tema: {tema}, Tipo: {tipo_aula}.
                 Regras: Centrado no aluno. TPC (Correção/Marcação).
                 Saída: [BLOCO_OBJETIVOS]...[FIM] [BLOCO_TABELA]...[FIM] (Separação ||)
@@ -235,9 +227,8 @@ with st.container(border=True):
                     if "||" in l and "Função" not in l:
                         cols = [c.strip() for c in l.split("||")]
                         while len(cols) < 7: cols.append("-")
-                        dados.append(cols[:7]) # Garante 7 colunas
+                        dados.append(cols[:7])
                 
-                # Salvar na sessão
                 st.session_state['res_pdf'] = True
                 st.session_state['d'] = dados
                 st.session_state['o'] = objs
@@ -246,16 +237,13 @@ with st.container(border=True):
             except Exception as e:
                 st.error(f"Erro: {e}")
 
-# Resultados
 if st.session_state.get('res_pdf'):
     st.divider()
     st.success("✅ Plano Pronto!")
     
-    # Botão de Download
     pdf_data = create_pdf(st.session_state['i'], st.session_state['d'], st.session_state['o'])
     st.download_button("📄 BAIXAR PDF (HORIZONTAL)", data=pdf_data, file_name="Plano.pdf", mime="application/pdf", type="primary")
     
-    # Prévia
     if st.session_state['d']:
         df = pd.DataFrame(st.session_state['d'], columns=["Min", "F. Didática", "Conteúdo", "Prof", "Aluno", "Métodos", "Meios"])
         st.dataframe(df, hide_index=True)
