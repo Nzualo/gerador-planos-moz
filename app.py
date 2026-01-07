@@ -73,7 +73,9 @@ class PDF(FPDF):
         max_lines = 1
         for i, text in enumerate(data):
             self.set_font("Arial", size=8)
-            lines = self.multi_cell(widths[i], 4, text, split_only=True)
+            # Proteção contra erros de texto vazio
+            texto_celula = str(text) if text is not None else ""
+            lines = self.multi_cell(widths[i], 4, texto_celula, split_only=True)
             if len(lines) > max_lines: max_lines = len(lines)
         height = max_lines * 4 + 4
         if self.get_y() + height > 270:
@@ -83,7 +85,8 @@ class PDF(FPDF):
         y_start = self.get_y()
         for i, text in enumerate(data):
             self.set_xy(x_start, y_start)
-            self.multi_cell(widths[i], 4, text, border=1)
+            texto_celula = str(text) if text is not None else ""
+            self.multi_cell(widths[i], 4, texto_celula, border=1)
             self.set_xy(x_start + widths[i], y_start)
             x_start += widths[i]
         self.set_y(y_start + height)
@@ -139,7 +142,14 @@ def create_word(inputs, dados, objetivos):
     return buffer
 
 def create_excel(dados):
-    df = pd.DataFrame(dados, columns=["Tempo", "Função", "Conteúdo", "Prof", "Aluno", "Métodos", "Meios"])
+    # Proteção: Garante que os dados correspondem às colunas
+    colunas = ["Tempo", "Função", "Conteúdo", "Prof", "Aluno", "Métodos", "Meios"]
+    
+    # Se não houver dados, cria uma linha vazia para não dar erro
+    if not dados:
+        dados = [["-"] * 7]
+        
+    df = pd.DataFrame(dados, columns=colunas)
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
         df.to_excel(writer, index=False)
@@ -150,7 +160,7 @@ def create_excel(dados):
 st.title("🇲🇿 Elaboração de Planos de Aulas")
 
 if "GOOGLE_API_KEY" not in st.secrets:
-    st.error("⚠️ Erro: Configure os Secrets.")
+    st.error("⚠️ Erro: Configure os Secrets!")
     st.stop()
 
 col1, col2 = st.columns(2)
@@ -189,30 +199,38 @@ if st.button("🚀 Criar Plano (PDF, Word, Excel)", type="primary"):
                 for l in lines:
                     if "||" in l and "Função" not in l:
                         cols = [c.strip() for c in l.split("||")]
+                        
+                        # --- FILTRO DE SEGURANÇA CONTRA O ERRO ---
+                        # 1. Se tiver menos de 7 colunas, preenche com "-"
                         while len(cols) < 7: cols.append("-")
+                        # 2. Se tiver MAIS de 7 colunas, corta o excesso (AQUI ESTAVA O PROBLEMA)
+                        cols = cols[:7]
+                        
                         dados.append(cols)
             
-            # GUARDAR NA MEMÓRIA (O SEGREDO!)
+            # GUARDAR NA MEMÓRIA
             st.session_state['plano_gerado'] = True
             st.session_state['dados'] = dados
             st.session_state['objetivos'] = objetivos
             st.session_state['inputs'] = {'disciplina': disciplina, 'classe': classe, 'duracao': duracao, 'tema': tema, 'unidade': unidade, 'tipo_aula': tipo_aula, 'turma': turma}
-            st.rerun() # Recarrega a página para mostrar os botões
+            st.rerun() 
             
         except Exception as e:
             st.error(f"Erro: {e}")
 
-# --- MOSTRAR RESULTADOS (SÓ SE JÁ TIVER GERADO) ---
+# --- MOSTRAR RESULTADOS ---
 if st.session_state.get('plano_gerado'):
     st.divider()
     st.subheader("✅ Plano Gerado com Sucesso!")
     
     # Recuperar dados da memória
-    dados = st.session_state['dados']
-    objetivos = st.session_state['objetivos']
-    inputs = st.session_state['inputs']
+    dados = st.session_state.get('dados', [])
+    objetivos = st.session_state.get('objetivos', "")
+    inputs = st.session_state.get('inputs', {})
 
     st.info(f"**Objetivos:** {objetivos}")
+    
+    # Proteção visual da tabela
     if dados:
         df = pd.DataFrame(dados, columns=["Tempo", "Função", "Conteúdo", "Prof", "Aluno", "Métodos", "Meios"])
         st.dataframe(df, hide_index=True)
@@ -220,15 +238,19 @@ if st.session_state.get('plano_gerado'):
     st.markdown("### 📥 Baixar Documentos")
     c1, c2, c3 = st.columns(3)
     
-    # Gerar arquivos na hora do clique
-    pdf_bytes = create_pdf(inputs, dados, objetivos)
-    c1.download_button("📄 PDF (Oficial)", data=pdf_bytes, file_name=f"Plano_{inputs['disciplina']}.pdf", mime="application/pdf")
-    
-    word_bytes = create_word(inputs, dados, objetivos)
-    c2.download_button("📝 Word (Editável)", data=word_bytes, file_name=f"Plano_{inputs['disciplina']}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-    
-    excel_bytes = create_excel(dados)
-    c3.download_button("📊 Excel (Tabela)", data=excel_bytes, file_name=f"Plano_{inputs['disciplina']}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    # Gerar arquivos
+    # Proteção com try/except nos botões para garantir que um erro não trave tudo
+    try:
+        pdf_bytes = create_pdf(inputs, dados, objetivos)
+        c1.download_button("📄 PDF (Oficial)", data=pdf_bytes, file_name=f"Plano_{inputs['disciplina']}.pdf", mime="application/pdf")
+        
+        word_bytes = create_word(inputs, dados, objetivos)
+        c2.download_button("📝 Word (Editável)", data=word_bytes, file_name=f"Plano_{inputs['disciplina']}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        
+        excel_bytes = create_excel(dados)
+        c3.download_button("📊 Excel (Tabela)", data=excel_bytes, file_name=f"Plano_{inputs['disciplina']}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    except Exception as erro_doc:
+        st.error(f"Erro ao criar arquivo: {erro_doc}")
     
     if st.button("🔄 Criar Novo Plano"):
         st.session_state['plano_gerado'] = False
