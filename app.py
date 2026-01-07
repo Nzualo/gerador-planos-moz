@@ -8,24 +8,20 @@ import time
 # --- CONFIGURAÇÃO INICIAL ---
 st.set_page_config(page_title="SDEJT - Planos SNE", page_icon="🇲🇿", layout="wide")
 
-# --- ESTILO VISUAL (DARK MODE) ---
+# --- ESTILO VISUAL ---
 st.markdown("""
 <style>
     .stApp { background-color: #0E1117; color: #FAFAFA; }
-    [data-testid="stSidebar"] { background-color: #262730; }
     .stTextInput > div > div > input, .stSelectbox > div > div > div, .stTextArea > div > div > textarea { color: #ffffff; }
     h1, h2, h3 { color: #FF4B4B !important; }
     .stFileUploader { background-color: #1E1E1E; border: 2px dashed #FF4B4B; border-radius: 10px; padding: 10px; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- FUNÇÃO DE LOGIN E CONTACTO ---
+# --- FUNÇÃO DE LOGIN ---
 def check_password():
-    if st.session_state.get("password_correct", False):
-        return True
+    if st.session_state.get("password_correct", False): return True
     st.markdown("## 🇲🇿 SDEJT - Elaboração de Planos")
-    st.markdown("##### Serviço Distrital de Educação, Juventude e Tecnologia - Inhassoro")
-    st.divider()
     col1, col2 = st.columns([1, 1])
     with col1:
         st.info("🔐 Acesso Restrito")
@@ -37,10 +33,8 @@ def check_password():
                     st.session_state["password_correct"] = True
                     st.session_state["user_name"] = usuario
                     st.rerun()
-                else: st.error("Senha incorreta.")
-            else: st.error("Usuário desconhecido.")
     with col2:
-        st.warning("⚠️ Suporte")
+        st.warning("⚠️ Suporte / Aquisição de Acesso")
         meu_numero = "258867926665"
         mensagem = "Saudações técnico Nzualo. Gostaria de solicitar acesso ao Gerador de Planos de Aulas."
         link_zap = f"https://wa.me/{meu_numero}?text={mensagem.replace(' ', '%20')}"
@@ -54,153 +48,121 @@ class PDF(FPDF):
     def header(self):
         self.set_font('Arial', 'B', 12); self.cell(0, 5, 'REPÚBLICA DE MOÇAMBIQUE', 0, 1, 'C')
         self.set_font('Arial', 'B', 10); self.cell(0, 5, 'GOVERNO DO DISTRITO DE INHASSORO', 0, 1, 'C')
-        self.cell(0, 5, 'SERVIÇO DISTRITAL DE EDUCAÇÃO, JUVENTUDE E TECNOLOGIA', 0, 1, 'C')
         self.ln(5); self.set_font('Arial', 'B', 14); self.cell(0, 10, 'PLANO DE AULA', 0, 1, 'C'); self.ln(2)
     def footer(self):
         self.set_y(-15); self.set_font('Arial', 'I', 6); self.cell(0, 10, 'SDEJT Inhassoro - Processado por IA', 0, 0, 'C')
     def clean_text(self, text):
-        if text is None: return "-"
-        return str(text).strip().replace('–', '-').replace('“', '"').replace('”', '"')
-    def table_row(self, data, widths):
-        row_data = [self.clean_text(d) for d in data]
-        max_lines = 1
-        for i, text in enumerate(row_data):
-            lines = self.multi_cell(widths[i], 4, text, split_only=True)
-            if len(lines) > max_lines: max_lines = len(lines)
-        height = max_lines * 4 + 4
-        if self.get_y() + height > 270: self.add_page(); self.draw_table_header(widths)
-        x_start, y_start = self.get_x(), self.get_y()
-        for i, text in enumerate(row_data):
-            self.set_xy(x_start, y_start); self.multi_cell(widths[i], 4, text, border=0, align='L')
-            x_start += widths[i]
-        self.set_xy(10, y_start); x_curr = 10
-        for w in widths: self.rect(x_curr, y_start, w, height); x_curr += w
-        self.set_y(y_start + height)
+        return str(text).encode('latin-1', 'replace').decode('latin-1')
     def draw_table_header(self, widths):
         headers = ["TEMPO", "F. DIDÁTICA", "ACTIV. PROFESSOR", "ACTIV. ALUNO", "MÉTODOS", "MEIOS"]
         self.set_font("Arial", "B", 7); self.set_fill_color(220, 220, 220)
         for i, h in enumerate(headers): self.cell(widths[i], 6, h, 1, 0, 'C', True)
         self.ln()
-
-def create_pdf(inputs, dados, obj_geral, obj_especificos):
-    pdf = PDF(); pdf.set_auto_page_break(auto=False); pdf.add_page()
-    pdf.set_font("Arial", size=10); pdf.cell(130, 7, f"Escola: __________________", 0, 0); pdf.cell(0, 7, f"Data: ____/____/2026", 0, 1)
-    pdf.cell(0, 7, f"Unidade Temática: {pdf.clean_text(inputs['unidade'])}", 0, 1)
-    pdf.set_font("Arial", "B", 10); pdf.cell(0, 7, f"Tema: {pdf.clean_text(inputs['tema'])}", 0, 1)
-    pdf.set_font("Arial", size=10); pdf.cell(100, 7, f"Professor: ________________", 0, 0); pdf.cell(0, 7, f"Duração: {inputs['duracao']}", 0, 1)
-    pdf.line(10, pdf.get_y()+2, 200, pdf.get_y()+2); pdf.ln(5)
-    pdf.set_font("Arial", "B", 10); pdf.cell(40, 6, "OBJETIVO GERAL:", 0, 0); pdf.set_font("Arial", size=10); pdf.multi_cell(0, 6, pdf.clean_text(obj_geral)); pdf.ln(2)
-    pdf.set_font("Arial", "B", 9); pdf.cell(0, 6, "OBJECTIVOS ESPECÍFICOS:", 0, 1); pdf.multi_cell(0, 5, pdf.clean_text(obj_especificos)); pdf.ln(5)
-    widths = [12, 40, 45, 45, 23, 25]; pdf.draw_table_header(widths)
-    for row in dados: pdf.table_row(row, widths)
-    return pdf.output(dest='S').encode('latin-1', 'replace')
+    def table_row(self, data, widths):
+        row_data = [self.clean_text(d) for d in data]; max_lines = 1
+        for i, text in enumerate(row_data):
+            lines = self.multi_cell(widths[i], 4, text, split_only=True)
+            if len(lines) > max_lines: max_lines = len(lines)
+        height = max_lines * 4 + 4
+        if self.get_y() + height > 270: self.add_page(); self.draw_table_header(widths)
+        y_start = self.get_y(); x_start = 10
+        for i, text in enumerate(row_data):
+            self.set_xy(x_start, y_start); self.multi_cell(widths[i], 4, text, align='L')
+            x_start += widths[i]
+        x_curr = 10
+        for w in widths: self.rect(x_curr, y_start, w, height); x_curr += w
+        self.set_y(y_start + height)
 
 # --- LÓGICA DE GERAÇÃO ---
-def gerar_plano(instrucoes_arquivo="", refinamento=""):
+def gerar_plano(instrucoes_arquivo="", instrucoes_ajuste="", arquivo=None):
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
     try:
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        status_text.text("🔄 Configurando Inteligência Artificial...")
+        status_text.text("Conectando ao cérebro da IA...")
+        progress_bar.progress(10)
         genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-        progress_bar.progress(20)
         
-        status_text.text("📚 Analisando material e currículo moçambicano...")
         duracao = st.session_state['tmp_duracao']
-        qtd_geral = "2 (Dois)" if "90" in duracao else "1 (Um)"
-        qtd_especificos = "5 (Cinco)" if "90" in duracao else "3 (Três)"
-        progress_bar.progress(40)
-
-        prompt = f"""
-        Aja como Pedagogo Especialista do SNE Moçambique.
-        Plano: {st.session_state['tmp_disciplina']}, {st.session_state['tmp_classe']}, Tema: {st.session_state['tmp_tema']}, Duração: {duracao}.
-        {f'Instruções sobre o arquivo: {instrucoes_arquivo}' if instrucoes_arquivo else ''}
-        {f'Ajustes de refinamento: {refinamento}' if refinamento else ''}
-        
-        REGRAS:
-        - Objetivos: Geral ({qtd_geral}), Específicos (Máx {qtd_especificos}) com verbos no infinitivo.
-        - Tabela: 6 colunas (Tempo, Função, Act. Prof, Act. Aluno, Métodos, Meios).
-        - Actividades: Descreva detalhadamente o passo a passo pedagógico.
+        prompt = f"""Aja como Pedagogo do SNE Moçambique. Disciplina: {st.session_state['tmp_disciplina']}, Tema: {st.session_state['tmp_tema']}.
+        COMANDO PARA O ARQUIVO: {instrucoes_arquivo}
+        COMANDO DE AJUSTE: {instrucoes_ajuste}
         SAÍDA: [BLOCO_GERAL]...[FIM_GERAL] [BLOCO_ESPECIFICOS]...[FIM_ESPECIFICOS] [BLOCO_TABELA]...[FIM_TABELA]
-        """
-        
-        status_text.text("✍️ Elaborando plano detalhado...")
-        conteudo_prompt = [prompt]
-        if arquivo_enviado:
-            if arquivo_enviado.type in ['image/png', 'image/jpeg', 'image/jpg']:
-                conteudo_prompt.append(Image.open(arquivo_enviado))
-            else:
-                conteudo_prompt.append({"mime_type": "application/pdf", "data": arquivo_enviado.getvalue()})
-        
-        # Uso do 1.5-Flash para evitar erro 429 de cota do 2.5
-        model = genai.GenerativeModel('models/gemini-1.5-flash')
-        response = model.generate_content(conteudo_prompt)
-        texto = response.text
-        progress_bar.progress(80)
+        Use 6 colunas separadas por || na tabela."""
 
-        status_text.text("📋 Formatando tabelas e objetivos...")
-        st.session_state['obj_geral'] = texto.split("[BLOCO_GERAL]")[1].split("[FIM_GERAL]")[0].strip()
-        st.session_state['obj_especificos'] = texto.split("[BLOCO_ESPECIFICOS]")[1].split("[FIM_ESPECIFICOS]")[0].strip()
+        conteudo = [prompt]
+        if arquivo:
+            if arquivo.type in ['image/png', 'image/jpeg']: conteudo.append(Image.open(arquivo))
+            else: conteudo.append({"mime_type": "application/pdf", "data": arquivo.getvalue()})
+
+        progress_bar.progress(40)
+        status_text.text("Analisando materiais e estruturando pedagogia...")
+        
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        response = model.generate_content(conteudo)
+        
+        progress_bar.progress(80)
+        status_text.text("Finalizando tabelas e objetivos...")
+        
+        texto = response.text
+        st.session_state['obj_geral'] = texto.split("[BLOCO_GERAL]")[1].split("[FIM_GERAL]")[0].strip() if "[BLOCO_GERAL]" in texto else ""
+        st.session_state['obj_especificos'] = texto.split("[BLOCO_ESPECIFICOS]")[1].split("[FIM_ESPECIFICOS]")[0].strip() if "[BLOCO_ESPECIFICOS]" in texto else ""
         
         dados = []
-        block = texto.split("[BLOCO_TABELA]")[1].split("[FIM_TABELA]")[0].strip()
-        for l in block.split('\n'):
-            if "||" in l:
-                cols = [c.strip() for c in l.split("||")]
-                while len(cols) < 6: cols.append("-")
-                dados.append(cols[:6])
+        if "[BLOCO_TABELA]" in texto:
+            block = texto.split("[BLOCO_TABELA]")[1].split("[FIM_TABELA]")[0].strip()
+            for l in block.split('\n'):
+                if "||" in l:
+                    cols = [c.strip() for c in l.split("||")]
+                    while len(cols) < 6: cols.append("-")
+                    dados.append(cols[:6])
         
         st.session_state['dados_pdf'] = dados
         st.session_state['plano_pronto'] = True
         progress_bar.progress(100)
-        status_text.text("✅ Plano concluído!")
+        status_text.text("Plano concluído!")
         time.sleep(1)
         status_text.empty()
         progress_bar.empty()
-        
+
     except Exception as e:
-        st.error(f"Erro: Verifique se os blocos foram gerados corretamente ou tente novamente. Detalhe: {e}")
+        progress_bar.empty()
+        status_text.empty()
+        if "429" in str(e): st.error("⚠️ Limite de uso temporário atingido. Por favor, aguarde 30 segundos e tente novamente.")
+        else: st.error(f"Erro: {e}")
 
 # --- INTERFACE ---
 st.title("🇲🇿 Elaboração de Planos de Aulas")
+
 col1, col2 = st.columns(2)
 with col1:
-    disciplina = st.text_input("Disciplina", "Língua Portuguesa", key='tmp_disciplina')
-    classe = st.selectbox("Classe", ["1ª", "2ª", "3ª", "4ª", "5ª", "6ª", "7ª", "8ª", "9ª", "10ª", "11ª", "12ª"], key='tmp_classe')
-    tema = st.text_input("Tema", placeholder="Ex: Vogais", key='tmp_tema')
+    st.text_input("Disciplina", "Língua Portuguesa", key='tmp_disciplina')
+    st.selectbox("Classe", ["1ª", "2ª", "3ª", "4ª", "5ª", "6ª", "7ª", "8ª", "9ª", "10ª", "11ª", "12ª"], key='tmp_classe')
 with col2:
-    duracao = st.selectbox("Duração", ["45 Min", "90 Min"], key='tmp_duracao')
-    unidade = st.text_input("Unidade", placeholder="Ex: Textos Normativos", key='tmp_unidade')
-    tipo_aula = st.selectbox("Tipo de Aula", ["Introdução de Matéria Nova", "Consolidação", "Avaliação"], key='tmp_tipo_aula')
+    st.selectbox("Duração", ["45 Min", "90 Min"], key='tmp_duracao')
+    st.text_input("Tema", placeholder="Ex: Vogais", key='tmp_tema')
 
-st.markdown("### 📚 Material de Apoio (Opcional)")
+st.markdown("### 📚 Material de Apoio")
 arquivo_enviado = st.file_uploader("Carregar PDF ou Foto do Livro", type=['pdf', 'png', 'jpg', 'jpeg'])
+comando_ia_arquivo = st.text_input("🤖 Comando para a IA sobre o ficheiro (Opcional)", placeholder="Ex: Use apenas o texto da página 10...")
 
-# NOVO CAMPO: Prompt para o arquivo
-prompt_arquivo = ""
-if arquivo_enviado:
-    prompt_arquivo = st.text_area("🎯 O que a IA deve focar no arquivo?", placeholder="Ex: Use apenas o texto da página 45 e foque nos exercícios de interpretação...")
-
-if st.button("🚀 Gerar Plano de Aula", type="primary"):
-    st.session_state['turma'] = "A" # Valor padrão para evitar erro
-    gerar_plano(instrucoes_arquivo=prompt_arquivo)
+if st.button("🚀 Gerar Plano de Aula", type="primary", use_container_width=True):
+    gerar_plano(instrucoes_arquivo=comando_ia_arquivo, arquivo=arquivo_enviado)
 
 if st.session_state.get('plano_pronto'):
     st.divider()
-    st.subheader("📋 Pré-visualização")
-    st.info(f"**Objetivo Geral:** {st.session_state['obj_geral']}\n\n**Específicos:**\n{st.session_state['obj_especificos']}")
-    df = pd.DataFrame(st.session_state['dados_pdf'], columns=["Tempo", "F. Didática", "Prof", "Aluno", "Métodos", "Meios"])
-    st.dataframe(df, hide_index=True, use_container_width=True)
+    st.info(f"**Geral:** {st.session_state['obj_geral']}")
+    if st.session_state['dados_pdf']:
+        df = pd.DataFrame(st.session_state['dados_pdf'], columns=["Tempo", "F. Didática", "Prof", "Aluno", "Métodos", "Meios"])
+        st.dataframe(df, hide_index=True, use_container_width=True)
 
     st.markdown("### 🛠️ Ajustar ou Melhorar")
-    ajuste = st.text_area("O que deseja refinar?", placeholder="Ex: Adicione mais tempo na mediação...")
+    ajuste = st.text_area("O que deseja mudar no plano gerado?", key="campo_ajuste")
     
     c1, c2 = st.columns(2)
     with c1:
-        if st.button("🔄 Aplicar Melhorias"):
-            gerar_plano(instrucoes_arquivo=prompt_arquivo, refinamento=ajuste)
-            st.rerun()
+        if st.button("🔄 Aplicar Ajustes", use_container_width=True):
+            gerar_plano(instrucoes_ajuste=ajuste, arquivo=arquivo_enviado); st.rerun()
     with c2:
-        inputs = {'unidade': unidade, 'tema': tema, 'duracao': duracao, 'tipo_aula': tipo_aula, 'turma': 'A'}
-        pdf_bytes = create_pdf(inputs, st.session_state['dados_pdf'], st.session_state['obj_geral'], st.session_state['obj_especificos'])
-        st.download_button("📄 Baixar PDF Final", data=pdf_bytes, file_name="Plano_Aula_SDEJT.pdf", mime="application/pdf")
+        if st.button("🗑️ Novo Plano", use_container_width=True):
+            st.session_state['plano_pronto'] = False; st.rerun()
