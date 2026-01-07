@@ -45,9 +45,9 @@ def check_password():
         st.write("Este sistema é exclusivo para técnicos e professores de Inhassoro.")
         st.write("Para obter o seu usuário e senha, clique abaixo para falar com o Administrador:")
         
-        # --- SEU NÚMERO AQUI (JÁ CONFIGURADO) ---
+        # --- SEU NÚMERO E MENSAGEM NOVA ---
         meu_numero = "258867926665" 
-        mensagem = "Olá Chefe, sou professor do distrito e gostaria de solicitar acesso (Usuário e Senha) ao Gerador de Planos SNE."
+        mensagem = "Olá Técnico Nzualo, sou professor do distrito e gostaria de solicitar acesso (Usuário e Senha) ao Gerador de Planos SNE."
         link_zap = f"https://wa.me/{meu_numero}?text={mensagem.replace(' ', '%20')}"
         
         # Botão Verde Bonito
@@ -217,30 +217,5 @@ if st.button("Gerar Plano SNE (Final)", type="primary"):
             [BLOCO_TABELA]...[FIM_TABELA]
             """
             
-            response = model.generate_content(prompt)
-            texto = response.text
-            
-            objetivos = "..."
-            dados = []
-            
-            if "[BLOCO_OBJETIVOS]" in texto:
-                objetivos = texto.split("[BLOCO_OBJETIVOS]")[1].split("[FIM_OBJETIVOS]")[0].strip()
-            if "[BLOCO_TABELA]" in texto:
-                lines = texto.split("[BLOCO_TABELA]")[1].split("[FIM_TABELA]")[0].strip().split('\n')
-                for l in lines:
-                    if "||" in l and "Função" not in l:
-                        cols = [c.strip() for c in l.split("||")]
-                        while len(cols) < 7: cols.append("-")
-                        dados.append(cols)
-            
-            inputs_pdf = {'disciplina': disciplina, 'classe': classe, 'duracao': duracao, 'tema': tema, 'unidade': unidade, 'tipo_aula': tipo_aula, 'turma': turma}
-            
-            st.subheader("👁️ Pré-visualização")
-            st.info(objetivos)
-            if dados:
-                df = pd.DataFrame(dados, columns=["Tempo", "F. Didática", "Conteúdo", "Prof.", "Aluno", "Métodos", "Meios"])
-                st.dataframe(df, hide_index=True)
-                pdf_bytes = create_pdf_table(inputs_pdf, dados, objetivos)
-                st.download_button("⬇️ Baixar Plano PDF", data=pdf_bytes, file_name=f"Plano_{disciplina}.pdf", mime="application/pdf")
-        except Exception as e:
-            st.error(f"Erro: {e}")
+            response = model
+
