@@ -2,12 +2,9 @@ import streamlit as st
 import google.generativeai as genai
 from fpdf import FPDF
 import pandas as pd
-from docx import Document
-import io
-import time
 
 # --- CONFIGURAÇÃO INICIAL ---
-st.set_page_config(page_title="Gestão de Planos", page_icon="🇲🇿", layout="wide")
+st.set_page_config(page_title="SDEJT - Planos", page_icon="🇲🇿", layout="wide")
 
 # --- FUNÇÃO DE LOGIN ---
 def check_password():
@@ -53,7 +50,7 @@ with st.sidebar:
         st.session_state["password_correct"] = False
         st.rerun()
 
-# --- FUNÇÕES DE DOCUMENTOS ---
+# --- CLASSE PDF (LINHAS PERFEITAS) ---
 class PDF(FPDF):
     def header(self):
         self.set_font('Arial', 'B', 12)
@@ -65,96 +62,102 @@ class PDF(FPDF):
         self.set_font('Arial', 'B', 14)
         self.cell(0, 10, 'PLANO DE AULA', 0, 1, 'C')
         self.ln(2)
+
     def footer(self):
         self.set_y(-15)
         self.set_font('Arial', 'I', 6)
         self.cell(0, 10, 'SDEJT Inhassoro - Processado por IA', 0, 0, 'C')
+
     def table_row(self, data, widths):
+        # 1. Calcular altura máxima da linha
         max_lines = 1
         for i, text in enumerate(data):
             self.set_font("Arial", size=8)
-            # Proteção contra erros de texto vazio
-            texto_celula = str(text) if text is not None else ""
-            lines = self.multi_cell(widths[i], 4, texto_celula, split_only=True)
-            if len(lines) > max_lines: max_lines = len(lines)
-        height = max_lines * 4 + 4
+            texto_seguro = str(text) if text is not None else ""
+            lines = self.multi_cell(widths[i], 4, texto_seguro, split_only=True)
+            if len(lines) > max_lines:
+                max_lines = len(lines)
+        
+        height = max_lines * 4 + 4 # Altura da célula
+        
+        # 2. Verificar quebra de página
         if self.get_y() + height > 270:
             self.add_page()
-            self.ln(5)
+            # Redesenha cabeçalho da tabela se pular página
+            headers = ["TEMPO", "F. DIDÁTICA", "CONTEÚDO", "ACTIV. PROFESSOR", "ACTIV. ALUNO", "MÉTODOS", "MEIOS"]
+            self.set_font("Arial", "B", 7)
+            self.set_fill_color(230, 230, 230)
+            for i, h in enumerate(headers):
+                self.cell(widths[i], 6, h, 1, 0, 'C', True)
+            self.ln()
+
+        # 3. Desenhar conteúdo e bordas
         x_start = self.get_x()
         y_start = self.get_y()
+        
         for i, text in enumerate(data):
             self.set_xy(x_start, y_start)
-            texto_celula = str(text) if text is not None else ""
-            self.multi_cell(widths[i], 4, texto_celula, border=1)
-            self.set_xy(x_start + widths[i], y_start)
+            self.set_font("Arial", size=8)
+            texto_seguro = str(text) if text is not None else ""
+            self.multi_cell(widths[i], 4, texto_seguro, border=0)
             x_start += widths[i]
+
+        # 4. Desenhar Retângulos (Bordas Perfeitas)
+        self.set_xy(10, y_start)
+        x_curr = 10
+        for w in widths:
+            self.rect(x_curr, y_start, w, height)
+            x_curr += w
+        
         self.set_y(y_start + height)
 
 def create_pdf(inputs, dados, objetivos):
     pdf = PDF()
     pdf.set_auto_page_break(auto=False)
     pdf.add_page()
+    
+    # Cabeçalho Administrativo
     pdf.set_font("Arial", size=10)
-    pdf.cell(0, 7, f"Escola: ___________________________________  Data: ___/___/____", 0, 1)
-    pdf.cell(0, 7, f"Disciplina: {inputs['disciplina']} | Classe: {inputs['classe']} | Turma: {inputs['turma']}", 0, 1)
-    pdf.cell(0, 7, f"Unidade: {inputs['unidade']}", 0, 1)
+    pdf.cell(130, 7, f"Escola: __________________________________________________", 0, 0)
+    pdf.cell(0, 7, f"Data: ____/____/2026", 0, 1)
+    
+    pdf.cell(0, 7, f"Unidade Temática: {inputs['unidade']}", 0, 1)
+    
     pdf.set_font("Arial", "B", 10)
     pdf.cell(0, 7, f"Tema: {inputs['tema']}", 0, 1)
     pdf.set_font("Arial", size=10)
-    pdf.cell(0, 7, f"Tipo: {inputs['tipo_aula']} | Duração: {inputs['duracao']}", 0, 1)
-    pdf.ln(3)
-    pdf.set_font("Arial", "B", 10)
-    pdf.multi_cell(0, 5, f"OBJETIVOS: {objetivos}")
-    pdf.ln(3)
+    
+    pdf.cell(100, 7, f"Professor: ______________________________", 0, 0)
+    pdf.cell(50, 7, f"Turma: {inputs['turma']}", 0, 0)
+    pdf.cell(0, 7, f"Duração: {inputs['duracao']}", 0, 1)
+    
+    pdf.cell(100, 7, f"Tipo de Aula: {inputs['tipo_aula']}", 0, 0)
+    pdf.cell(0, 7, f"Nº Alunos: M_____  F_____  Total:_____", 0, 1)
+    
+    pdf.line(10, pdf.get_y()+2, 200, pdf.get_y()+2)
+    pdf.ln(5)
+
+    # Objetivos
+    pdf.set_font("Arial", "B", 9)
+    pdf.cell(0, 6, "OBJECTIVOS ESPECÍFICOS:", 0, 1)
+    pdf.set_font("Arial", size=9)
+    pdf.multi_cell(0, 5, objetivos)
+    pdf.ln(5)
+
+    # Tabela
     widths = [12, 28, 35, 35, 35, 22, 23]
-    headers = ["Tempo", "F. Didática", "Conteúdo", "Professor", "Aluno", "Métodos", "Meios"]
-    pdf.set_font("Arial", "B", 8)
-    pdf.set_fill_color(220, 220, 220)
+    headers = ["TEMPO", "F. DIDÁTICA", "CONTEÚDO", "ACTIV. PROFESSOR", "ACTIV. ALUNO", "MÉTODOS", "MEIOS"]
+    
+    pdf.set_font("Arial", "B", 7)
+    pdf.set_fill_color(230, 230, 230)
     for i, h in enumerate(headers):
         pdf.cell(widths[i], 6, h, 1, 0, 'C', True)
     pdf.ln()
+    
     for row in dados:
         pdf.table_row(row, widths)
+
     return pdf.output(dest='S').encode('latin-1', 'ignore')
-
-def create_word(inputs, dados, objetivos):
-    doc = Document()
-    p = doc.add_paragraph()
-    p.alignment = 1
-    run = p.add_run('REPÚBLICA DE MOÇAMBIQUE\nGOVERNO DO DISTRITO DE INHASSORO\nSDEJT\n\nPLANO DE AULA')
-    run.bold = True
-    doc.add_paragraph(f"Escola: __________________ Data: ____/____/____")
-    doc.add_paragraph(f"Disciplina: {inputs['disciplina']} | Classe: {inputs['classe']}")
-    doc.add_paragraph(f"Tema: {inputs['tema']}")
-    doc.add_paragraph(f"Objetivos: {objetivos}")
-    table = doc.add_table(rows=1, cols=7)
-    table.style = 'Table Grid'
-    hdr_cells = table.rows[0].cells
-    headers = ["Tempo", "Função", "Conteúdo", "Prof", "Aluno", "Métodos", "Meios"]
-    for i, h in enumerate(headers): hdr_cells[i].text = h
-    for row_data in dados:
-        row_cells = table.add_row().cells
-        for i, item in enumerate(row_data): row_cells[i].text = str(item)
-    buffer = io.BytesIO()
-    doc.save(buffer)
-    buffer.seek(0)
-    return buffer
-
-def create_excel(dados):
-    # Proteção: Garante que os dados correspondem às colunas
-    colunas = ["Tempo", "Função", "Conteúdo", "Prof", "Aluno", "Métodos", "Meios"]
-    
-    # Se não houver dados, cria uma linha vazia para não dar erro
-    if not dados:
-        dados = [["-"] * 7]
-        
-    df = pd.DataFrame(dados, columns=colunas)
-    buffer = io.BytesIO()
-    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False)
-    buffer.seek(0)
-    return buffer
 
 # --- INTERFACE PRINCIPAL ---
 st.title("🇲🇿 Elaboração de Planos de Aulas")
@@ -163,6 +166,7 @@ if "GOOGLE_API_KEY" not in st.secrets:
     st.error("⚠️ Erro: Configure os Secrets!")
     st.stop()
 
+# --- FORMULÁRIO ---
 col1, col2 = st.columns(2)
 with col1:
     disciplina = st.text_input("Disciplina", "Língua Portuguesa")
@@ -175,83 +179,4 @@ with col2:
     tema = st.text_input("Tema", placeholder="Ex: Vogais")
 
 # --- BOTÃO GERAR ---
-if st.button("🚀 Criar Plano (PDF, Word, Excel)", type="primary"):
-    with st.spinner('A processar...'):
-        try:
-            genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-            model = genai.GenerativeModel('models/gemini-2.5-flash')
-            prompt = f"""
-            Aja como Pedagogo do SNE Moçambique.
-            Plano: {disciplina}, {classe}, Tema: {tema}.
-            REGRAS: 1. TPC (Correção/Marcação). 2. OBJETIVOS: Max 3. 3. TABELA: "||".
-            SAÍDA: [BLOCO_OBJETIVOS]...[FIM_OBJETIVOS] [BLOCO_TABELA]...[FIM_TABELA]
-            """
-            response = model.generate_content(prompt)
-            texto = response.text
-            
-            # Extração de Dados
-            objetivos = "..."
-            dados = []
-            if "[BLOCO_OBJETIVOS]" in texto:
-                objetivos = texto.split("[BLOCO_OBJETIVOS]")[1].split("[FIM_OBJETIVOS]")[0].strip()
-            if "[BLOCO_TABELA]" in texto:
-                lines = texto.split("[BLOCO_TABELA]")[1].split("[FIM_TABELA]")[0].strip().split('\n')
-                for l in lines:
-                    if "||" in l and "Função" not in l:
-                        cols = [c.strip() for c in l.split("||")]
-                        
-                        # --- FILTRO DE SEGURANÇA CONTRA O ERRO ---
-                        # 1. Se tiver menos de 7 colunas, preenche com "-"
-                        while len(cols) < 7: cols.append("-")
-                        # 2. Se tiver MAIS de 7 colunas, corta o excesso (AQUI ESTAVA O PROBLEMA)
-                        cols = cols[:7]
-                        
-                        dados.append(cols)
-            
-            # GUARDAR NA MEMÓRIA
-            st.session_state['plano_gerado'] = True
-            st.session_state['dados'] = dados
-            st.session_state['objetivos'] = objetivos
-            st.session_state['inputs'] = {'disciplina': disciplina, 'classe': classe, 'duracao': duracao, 'tema': tema, 'unidade': unidade, 'tipo_aula': tipo_aula, 'turma': turma}
-            st.rerun() 
-            
-        except Exception as e:
-            st.error(f"Erro: {e}")
-
-# --- MOSTRAR RESULTADOS ---
-if st.session_state.get('plano_gerado'):
-    st.divider()
-    st.subheader("✅ Plano Gerado com Sucesso!")
-    
-    # Recuperar dados da memória
-    dados = st.session_state.get('dados', [])
-    objetivos = st.session_state.get('objetivos', "")
-    inputs = st.session_state.get('inputs', {})
-
-    st.info(f"**Objetivos:** {objetivos}")
-    
-    # Proteção visual da tabela
-    if dados:
-        df = pd.DataFrame(dados, columns=["Tempo", "Função", "Conteúdo", "Prof", "Aluno", "Métodos", "Meios"])
-        st.dataframe(df, hide_index=True)
-
-    st.markdown("### 📥 Baixar Documentos")
-    c1, c2, c3 = st.columns(3)
-    
-    # Gerar arquivos
-    # Proteção com try/except nos botões para garantir que um erro não trave tudo
-    try:
-        pdf_bytes = create_pdf(inputs, dados, objetivos)
-        c1.download_button("📄 PDF (Oficial)", data=pdf_bytes, file_name=f"Plano_{inputs['disciplina']}.pdf", mime="application/pdf")
-        
-        word_bytes = create_word(inputs, dados, objetivos)
-        c2.download_button("📝 Word (Editável)", data=word_bytes, file_name=f"Plano_{inputs['disciplina']}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-        
-        excel_bytes = create_excel(dados)
-        c3.download_button("📊 Excel (Tabela)", data=excel_bytes, file_name=f"Plano_{inputs['disciplina']}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    except Exception as erro_doc:
-        st.error(f"Erro ao criar arquivo: {erro_doc}")
-    
-    if st.button("🔄 Criar Novo Plano"):
-        st.session_state['plano_gerado'] = False
-        st.rerun()
+if st.
