@@ -111,7 +111,8 @@ class PDF(FPDF):
         self.set_y(y_start + height)
 
     def draw_table_header(self, widths):
-        headers = ["TEMPO", "F. DIDÁTICA", "CONTEÚDO", "ACTIV. PROFESSOR", "ACTIV. ALUNO", "MÉTODOS", "MEIOS"]
+        # --- CABEÇALHO ATUALIZADO (SEM CONTEÚDO) ---
+        headers = ["TEMPO", "F. DIDÁTICA", "ACTIV. PROFESSOR", "ACTIV. ALUNO", "MÉTODOS", "MEIOS"]
         self.set_font("Arial", "B", 7)
         self.set_fill_color(220, 220, 220)
         for i, h in enumerate(headers):
@@ -155,15 +156,17 @@ def create_pdf(inputs, dados, obj_geral, obj_especificos):
     pdf.multi_cell(0, 5, pdf.clean_text(obj_especificos))
     pdf.ln(5)
 
-    # Tabela
-    widths = [12, 35, 35, 35, 30, 20, 23] 
+    # --- TABELA COM 6 COLUNAS (LARGURAS AJUSTADAS) ---
+    # Removida coluna Conteúdo (35). Espaço redistribuído para Atividades.
+    # Tempo(12), F.Didatica(40), Prof(45), Aluno(45), Metodos(23), Meios(25)
+    widths = [12, 40, 45, 45, 23, 25] 
     pdf.draw_table_header(widths)
     for row in dados:
         pdf.table_row(row, widths)
     return pdf.output(dest='S').encode('latin-1', 'replace')
 
 # --- TÍTULO ---
-st.title("🇲🇿 Elaboração de Planos de Aulas (Gemini 2.5)")
+st.title("🇲🇿 Elaboração de Planos de Aulas")
 
 if "GOOGLE_API_KEY" not in st.secrets:
     st.error("⚠️ ERRO: Configure os Secrets!")
@@ -183,16 +186,15 @@ with col2:
     tema = st.text_input("Tema", placeholder="Ex: Vogais")
 
 # --- GERAÇÃO IA ---
-if st.button("🚀 Gerar Plano (Gemini 2.5)", type="primary"):
-    with st.spinner('A usar Gemini 2.5 para detalhar as atividades...'):
+if st.button("🚀 Gerar Plano (Sem Coluna Conteúdo)", type="primary"):
+    with st.spinner('A usar Gemini 2.5 para detalhar atividades...'):
         try:
             genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
             
-            # --- DEFINIÇÃO DE OBJETIVOS BASEADA NO TEMPO ---
             if "90" in duracao:
                 qtd_geral = "EXATAMENTE 2 (Dois)"
                 qtd_especificos = "NO MÁXIMO 5 (Cinco)"
-            else: # 45 Min
+            else:
                 qtd_geral = "EXATAMENTE 1 (Um)"
                 qtd_especificos = "NO MÁXIMO 3 (Três)"
 
@@ -204,34 +206,36 @@ if st.button("🚀 Gerar Plano (Gemini 2.5)", type="primary"):
             - Objetivo Geral: {qtd_geral}.
             - Objetivos Específicos: {qtd_especificos}.
             
-            REGRAS DE CONTEÚDO (DETALHAMENTO):
-            1. As colunas "Actividade Professor" e "Actividade Aluno" devem ser MUITO DETALHADAS.
-               - ERRADO: "Explica a matéria".
-               - CORRETO: "O professor explica detalhadamente o conceito de X, utilizando o quadro para demonstrar Y e pedindo exemplos aos alunos sobre Z..."
+            REGRAS DE TABELA (IMPORTANTE):
+            1. A tabela NÃO DEVE ter a coluna Conteúdo.
+            2. Deve ter EXATAMENTE 6 COLUNAS.
+            3. Separador "||".
+            4. As atividades do Professor e Aluno devem ser MUITO DETALHADAS.
             
-            2. Estrutura da Tabela (7 Colunas, Separador "||"):
-               Tempo || Função Didática || Conteúdo || Actividade Professor || Actividade Aluno || Métodos || Meios
+            Estrutura da Tabela:
+            Tempo || Função Didática || Actividade Professor || Actividade Aluno || Métodos || Meios
 
-            3. AS 4 FUNÇÕES DIDÁTICAS OBRIGATÓRIAS:
-               1. Introdução e Motivação
-               2. Mediação e Assimilação
-               3. Domínio e Consolidação
-               4. Controlo e Avaliação
+            AS 4 FUNÇÕES DIDÁTICAS OBRIGATÓRIAS:
+            1. Introdução e Motivação
+            2. Mediação e Assimilação
+            3. Domínio e Consolidação
+            4. Controlo e Avaliação
 
             SAÍDA ESPERADA:
             [BLOCO_GERAL]...[FIM_GERAL]
             [BLOCO_ESPECIFICOS]...[FIM_ESPECIFICOS]
             [BLOCO_TABELA]
+            5 || 1. Introdução e Motivação || O professor faz a chamada e corrige o TPC anterior detalhadamente... || Os alunos respondem e apresentam os cadernos... || Elaboração Conjunta || Livro
             ...
             [FIM_TABELA]
             """
             
-            # --- TENTATIVA COM GEMINI 2.5 ---
+            # Tenta Gemini 2.5, fallback para 1.5
             try:
                 model = genai.GenerativeModel('models/gemini-2.5-flash')
                 response = model.generate_content(prompt)
             except Exception as e:
-                st.warning(f"⚠️ Gemini 2.5 instável ({e}). Usando Gemini 1.5 como reserva para não perder o plano.")
+                st.warning(f"⚠️ Gemini 2.5 ocupado. Redirecionando para 1.5 Flash.")
                 model = genai.GenerativeModel('models/gemini-1.5-flash')
                 response = model.generate_content(prompt)
 
@@ -254,8 +258,10 @@ if st.button("🚀 Gerar Plano (Gemini 2.5)", type="primary"):
                 for l in lines:
                     if "||" in l and "Função" not in l:
                         cols = [c.strip() for c in l.split("||")]
-                        while len(cols) < 7: cols.append("-")
-                        dados.append(cols[:7])
+                        
+                        # GARANTIR 6 COLUNAS (Sem Conteúdo)
+                        while len(cols) < 6: cols.append("-")
+                        dados.append(cols[:6])
             
             st.session_state['plano_pronto'] = True
             st.session_state['dados_pdf'] = dados
@@ -270,7 +276,7 @@ if st.button("🚀 Gerar Plano (Gemini 2.5)", type="primary"):
 # --- RESULTADO ---
 if st.session_state.get('plano_pronto'):
     st.divider()
-    st.subheader("✅ Plano Gerado (Gemini 2.5)")
+    st.subheader("✅ Plano Gerado (Formato SNE Atualizado)")
     
     dados = st.session_state['dados_pdf']
     obj_geral = st.session_state['obj_geral']
@@ -281,7 +287,8 @@ if st.session_state.get('plano_pronto'):
     st.info(obj_especificos)
     
     if dados:
-        df = pd.DataFrame(dados, columns=["Tempo", "F. Didática", "Conteúdo", "Prof", "Aluno", "Métodos", "Meios"])
+        # Colunas atualizadas para visualização
+        df = pd.DataFrame(dados, columns=["Tempo", "F. Didática", "Prof", "Aluno", "Métodos", "Meios"])
         st.dataframe(df, hide_index=True, use_container_width=True)
         
         c1, c2 = st.columns(2)
