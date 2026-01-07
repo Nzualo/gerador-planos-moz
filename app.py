@@ -4,10 +4,10 @@ from fpdf import FPDF
 import pandas as pd
 import time
 
-# --- 1. CONFIGURAÇÃO (OBRIGATÓRIA) ---
+# --- 1. CONFIGURAÇÃO (OBRIGATÓRIA - NÃO MEXER) ---
 st.set_page_config(page_title="SDEJT Planos", page_icon="🇲🇿", layout="wide")
 
-# --- 2. ESTILO VISUAL (DARK MODE CORRIGIDO) ---
+# --- 2. ESTILO VISUAL (CORRIGIDO) ---
 st.markdown("""
     <style>
     /* Fundo Escuro */
@@ -15,21 +15,17 @@ st.markdown("""
         background-color: #0E1117;
         color: #E0E0E0;
     }
-    
-    /* Caixas de Texto Legíveis */
+    /* Inputs Visíveis */
     .stTextInput > div > div > input {
         color: #FFFFFF !important;
         background-color: #262730 !important;
         border: 1px solid #4CAF50;
     }
-    
-    /* Selectbox */
     .stSelectbox > div > div > div {
         color: #FFFFFF !important;
         background-color: #262730 !important;
     }
-    
-    /* Botões Verdes */
+    /* Botões */
     div.stButton > button {
         background-color: #4CAF50;
         color: white;
@@ -41,13 +37,11 @@ st.markdown("""
         font-family: 'Times New Roman', serif;
         border-radius: 6px;
     }
-    
-    /* Fontes Oficiais */
-    h1, h2, h3, h4 {
+    /* Títulos */
+    h1, h2, h3 {
         font-family: 'Times New Roman', serif;
         color: #4CAF50 !important;
     }
-    
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     </style>
@@ -69,6 +63,7 @@ def check_password():
         senha = st.text_input("Senha", type="password")
         
         if st.button("ENTRAR", type="primary"):
+            # Verifica se os secrets existem, senão usa padrão para teste
             if "passwords" in st.secrets and usuario in st.secrets["passwords"]:
                 if st.secrets["passwords"][usuario] == senha:
                     st.session_state["password_correct"] = True
@@ -77,7 +72,7 @@ def check_password():
                 else:
                     st.error("Senha incorreta.")
             else:
-                st.error("Usuário não encontrado.")
+                st.error("Utilizador não encontrado ou Secrets não configurados.")
     return False
 
 if not check_password():
@@ -90,25 +85,10 @@ with st.sidebar:
         st.session_state["password_correct"] = False
         st.rerun()
 
-# --- 5. CLASSE PDF (INDENTAÇÃO CORRIGIDA) ---
+# --- 5. CLASSE PDF (CORRIGIDA) ---
 class PDF(FPDF):
     def header(self):
         self.set_font('Times', 'B', 12)
         self.cell(0, 5, 'REPÚBLICA DE MOÇAMBIQUE', 0, 1, 'C')
         self.set_font('Times', 'B', 11)
-        self.cell(0, 5, 'MINISTÉRIO DA EDUCAÇÃO E DESENVOLVIMENTO HUMANO', 0, 1, 'C')
-        self.cell(0, 5, 'SDEJT - DISTRITO DE INHASSORO', 0, 1, 'C')
-        self.ln(5)
-        self.set_font('Times', 'B', 14)
-        self.cell(0, 10, 'PLANO DE LIÇÃO', 0, 1, 'C')
-        self.ln(2)
-
-    def footer(self):
-        self.set_y(-15)
-        self.set_font('Times', 'I', 8)
-        self.cell(0, 10, 'SDEJT Inhassoro - Processado por IA', 0, 0, 'C')
-
-    def table_row(self, data, widths):
-        max_lines = 1
-        for i, text in enumerate(data):
-            self.set_font("Times", size=10)
+        self.cell(0, 5, 'MINISTÉRIO DA EDUCAÇÃO E DESENVOLV
