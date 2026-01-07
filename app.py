@@ -43,7 +43,7 @@ def check_password():
 
 if not check_password(): st.stop()
 
-# --- CLASSE PDF (CABEÇALHO LIMPO PARA PREENCHIMENTO MANUAL) ---
+# --- CLASSE PDF (FOCO NO PREENCHIMENTO MANUAL) ---
 class PDF(FPDF):
     def header(self):
         self.set_font('Arial', 'B', 12); self.cell(0, 5, 'REPÚBLICA DE MOÇAMBIQUE', 0, 1, 'C')
@@ -90,37 +90,45 @@ def create_pdf(inputs, dados, obj_geral, obj_especificos):
     
     pdf.set_font("Arial", "B", 10); pdf.cell(40, 6, "OBJETIVO GERAL:", 0, 0)
     pdf.set_font("Arial", size=10); pdf.set_xy(50, pdf.get_y()); pdf.multi_cell(0, 6, pdf.clean_text(obj_geral)); pdf.ln(2)
-    pdf.set_font("Arial", "B", 9); pdf.cell(0, 6, "OBJECTIVOS ESPECÍFICOS:", 0, 1)
+    pdf.set_font("Arial", "B", 9); pdf.cell(0, 6, "OBJECTIVOS ESPECÍRICOS:", 0, 1)
     pdf.set_font("Arial", size=9); pdf.multi_cell(0, 5, pdf.clean_text(obj_especificos)); pdf.ln(5)
     
     widths = [12, 40, 45, 45, 23, 25]; pdf.draw_table_header(widths)
     for row in dados: pdf.table_row(row, widths)
     return pdf.output(dest='S').encode('latin-1', 'replace')
 
-# --- LÓGICA DE GERAÇÃO (GEMINI 2.5 FLASH) ---
+# --- LÓGICA DE GERAÇÃO (FIXANDO AS 4 FUNÇÕES) ---
 def gerar_plano(instrucoes_arquivo="", instrucoes_ajuste="", arquivo=None):
     progress_bar = st.progress(0); status_text = st.empty()
     try:
-        status_text.text("Conectando ao Gemini 2.5 Flash..."); progress_bar.progress(10)
+        status_text.text("Acionando Gemini 2.5 Flash..."); progress_bar.progress(10)
         genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
         model = genai.GenerativeModel('gemini-2.5-flash')
         
-        prompt = f"""Aja como Pedagogo Especialista do SNE Moçambique.
-        Gere um plano de aula técnico. Disciplina: {st.session_state['tmp_disciplina']}, Classe: {st.session_state['tmp_classe']}.
-        Tema: {st.session_state['tmp_tema']}. Duração: {st.session_state['tmp_duracao']}.
+        # LÓGICA DE OBJETIVOS POR TEMPO
+        qtd_geral = "2 (Dois)" if "90" in st.session_state['tmp_duracao'] else "1 (Um)"
+        qtd_espec = "5 (Cinco)" if "90" in st.session_state['tmp_duracao'] else "3 (Três)"
+
+        prompt = f"""Aja como Pedagogo do SNE Moçambique. Gere um plano técnico detalhado.
+        Disciplina: {st.session_state['tmp_disciplina']}, Classe: {st.session_state['tmp_classe']}, Tema: {st.session_state['tmp_tema']}.
+        Duração: {st.session_state['tmp_duracao']}.
         
-        REGRAS RÍGIDAS DE PREENCHIMENTO:
-        1. A tabela DEVE ter exatamente 6 colunas separadas por ||.
-        2. NÃO coloque as palavras "Conteúdos", "Atividades" ou "Função" dentro das células. Coloque apenas a informação direta.
-        3. Detalhe minuciosamente o que o Professor faz e o que o Aluno faz em cada fase.
-        4. Use verbos no infinitivo para os objectivos.
-        5. NÃO gere cabeçalhos de identificação no texto.
+        REGRAS INQUEBRÁVEIS:
+        1. A tabela DEVE ter EXATAMENTE 4 LINHAS, uma para cada função didática:
+           - 1. Introdução e Motivação
+           - 2. Mediação e Assimilação
+           - 3. Domínio e Consolidação
+           - 4. Controlo e Avaliação
+        2. COLUNAS (Exatamente 6): Tempo || Função Didática || Actividade Professor || Actividade Aluno || Métodos || Meios.
+        3. OBJETIVOS: Verbos no infinitivo. Geral: {qtd_geral}. Específicos: Máximo {qtd_espec}.
+        4. DETALHAMENTO: Descreva minuciosamente as ações do professor e as reações do aluno.
+        5. NÃO inclua textos de identificação (Escola, Professor) no corpo do plano.
         
-        SAÍDA OBRIGATÓRIA:
-        [BLOCO_GERAL] (Texto curto) [FIM_GERAL]
-        [BLOCO_ESPECIFICOS] (Lista de objetivos) [FIM_ESPECIFICOS]
+        SAÍDA:
+        [BLOCO_GERAL] (Texto) [FIM_GERAL]
+        [BLOCO_ESPECIFICOS] (Lista) [FIM_ESPECIFICOS]
         [BLOCO_TABELA]
-        Tempo || Função Didática || Actividade Professor (Detalhada) || Actividade Aluno (Detalhada) || Métodos || Meios
+        Tempo || Função || Actividade Professor (Detalhada) || Actividade Aluno (Detalhada) || Métodos || Meios
         [FIM_TABELA]
         """
 
@@ -129,7 +137,7 @@ def gerar_plano(instrucoes_arquivo="", instrucoes_ajuste="", arquivo=None):
             if arquivo.type in ['image/png', 'image/jpeg']: conteudo.append(Image.open(arquivo))
             else: conteudo.append({"mime_type": "application/pdf", "data": arquivo.getvalue()})
 
-        progress_bar.progress(50); status_text.text("Analisando material de apoio e estruturando atividades...")
+        progress_bar.progress(50); status_text.text("Estruturando as 4 funções didáticas...")
         response = model.generate_content(conteudo)
         
         progress_bar.progress(90); texto = response.text
@@ -150,7 +158,7 @@ def gerar_plano(instrucoes_arquivo="", instrucoes_ajuste="", arquivo=None):
         progress_bar.progress(100); time.sleep(1); status_text.empty(); progress_bar.empty()
     except Exception as e:
         progress_bar.empty(); status_text.empty()
-        st.error(f"Erro na geração: {e}")
+        st.error(f"Erro: {e}")
 
 # --- INTERFACE ---
 st.title("🇲🇿 Elaboração de Planos de Aulas")
@@ -165,7 +173,7 @@ with col2:
 
 st.markdown("### 📚 Material de Apoio (Opcional)")
 arquivo_enviado = st.file_uploader("Carregar PDF ou Foto do Livro", type=['pdf', 'png', 'jpg', 'jpeg'])
-comando_ia = st.text_input("🤖 Instrução específica para a IA", placeholder="Ex: Baseie os exercícios no texto da imagem...")
+comando_ia = st.text_input("🤖 Comando específico para a IA", placeholder="Ex: Use o conteúdo da pág. 12 do livro enviado.")
 
 tipo_aula = st.selectbox("Tipo de Aula", ["Introdução de Matéria Nova", "Consolidação", "Revisão"], key='tmp_tipo_aula')
 
@@ -175,14 +183,14 @@ if st.button("🚀 Gerar Plano Completo", type="primary", use_container_width=Tr
 if st.session_state.get('plano_pronto'):
     st.divider()
     st.subheader("📋 Pré-visualização")
-    st.info(f"**Geral:** {st.session_state['obj_geral']}")
+    st.info(f"**Objetivo Geral:** {st.session_state['obj_geral']}")
     df = pd.DataFrame(st.session_state['dados_pdf'], columns=["Tempo", "F. Didática", "Prof", "Aluno", "Métodos", "Meios"])
     st.dataframe(df, hide_index=True, use_container_width=True)
 
     inputs = {'tema': st.session_state.get('tmp_tema',''), 'turma': 'A', 'duracao': st.session_state.get('tmp_duracao',''), 'tipo_aula': st.session_state.get('tmp_tipo_aula',''), 'unidade': ''}
     pdf_bytes = create_pdf(inputs, st.session_state['dados_pdf'], st.session_state['obj_geral'], st.session_state['obj_especificos'])
     
-    st.download_button("📄 Baixar PDF Final", data=pdf_bytes, file_name="Plano_Aula_SDEJT.pdf", mime="application/pdf", type="primary", use_container_width=True)
+    st.download_button("📄 Baixar PDF Final", data=pdf_bytes, file_name="Plano_SDEJT_Moçambique.pdf", mime="application/pdf", type="primary", use_container_width=True)
     
     st.markdown("### 🛠️ Ajustar ou Melhorar")
     ajuste_texto = st.text_area("O que deseja mudar no plano gerado?")
