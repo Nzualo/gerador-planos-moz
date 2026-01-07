@@ -34,7 +34,7 @@ def check_password():
                     st.session_state["user_name"] = usuario
                     st.rerun()
     with col2:
-        st.warning("⚠️ Suporte / Aquisição de Acesso")
+        st.warning("⚠️ Suporte")
         meu_numero = "258867926665"
         mensagem = "Saudações técnico Nzualo. Gostaria de solicitar acesso ao Gerador de Planos de Aulas."
         link_zap = f"https://wa.me/{meu_numero}?text={mensagem.replace(' ', '%20')}"
@@ -79,16 +79,20 @@ def gerar_plano(instrucoes_arquivo="", instrucoes_ajuste="", arquivo=None):
     status_text = st.empty()
     
     try:
-        status_text.text("Conectando ao cérebro da IA...")
+        status_text.text("Iniciando IA avançada...")
         progress_bar.progress(10)
         genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
         
+        # FIXO NO MODELO GEMINI 2.5 FLASH
+        model = genai.GenerativeModel('gemini-2.5-flash')
+        
         duracao = st.session_state['tmp_duracao']
         prompt = f"""Aja como Pedagogo do SNE Moçambique. Disciplina: {st.session_state['tmp_disciplina']}, Tema: {st.session_state['tmp_tema']}.
+        Duração: {duracao}. Classe: {st.session_state['tmp_classe']}.
         COMANDO PARA O ARQUIVO: {instrucoes_arquivo}
         COMANDO DE AJUSTE: {instrucoes_ajuste}
         SAÍDA: [BLOCO_GERAL]...[FIM_GERAL] [BLOCO_ESPECIFICOS]...[FIM_ESPECIFICOS] [BLOCO_TABELA]...[FIM_TABELA]
-        Use 6 colunas separadas por || na tabela."""
+        Regras: Use 6 colunas (Tempo, Função, Act. Prof, Act. Aluno, Métodos, Meios) separadas por ||."""
 
         conteudo = [prompt]
         if arquivo:
@@ -96,13 +100,12 @@ def gerar_plano(instrucoes_arquivo="", instrucoes_ajuste="", arquivo=None):
             else: conteudo.append({"mime_type": "application/pdf", "data": arquivo.getvalue()})
 
         progress_bar.progress(40)
-        status_text.text("Analisando materiais e estruturando pedagogia...")
+        status_text.text("Analisando documentos e estruturando didática...")
         
-        model = genai.GenerativeModel('gemini-1.5-flash')
         response = model.generate_content(conteudo)
         
-        progress_bar.progress(80)
-        status_text.text("Finalizando tabelas e objetivos...")
+        progress_bar.progress(85)
+        status_text.text("Processando tabelas detalhadas...")
         
         texto = response.text
         st.session_state['obj_geral'] = texto.split("[BLOCO_GERAL]")[1].split("[FIM_GERAL]")[0].strip() if "[BLOCO_GERAL]" in texto else ""
@@ -120,7 +123,7 @@ def gerar_plano(instrucoes_arquivo="", instrucoes_ajuste="", arquivo=None):
         st.session_state['dados_pdf'] = dados
         st.session_state['plano_pronto'] = True
         progress_bar.progress(100)
-        status_text.text("Plano concluído!")
+        status_text.text("Concluído!")
         time.sleep(1)
         status_text.empty()
         progress_bar.empty()
@@ -128,8 +131,12 @@ def gerar_plano(instrucoes_arquivo="", instrucoes_ajuste="", arquivo=None):
     except Exception as e:
         progress_bar.empty()
         status_text.empty()
-        if "429" in str(e): st.error("⚠️ Limite de uso temporário atingido. Por favor, aguarde 30 segundos e tente novamente.")
-        else: st.error(f"Erro: {e}")
+        if "429" in str(e): 
+            st.error("⚠️ Limite de quota atingido. Aguarde cerca de 30 segundos e tente novamente.")
+        elif "404" in str(e):
+            st.error("⚠️ Erro de versão do modelo. Contacte o administrador para atualizar a biblioteca.")
+        else: 
+            st.error(f"Erro inesperado: {e}")
 
 # --- INTERFACE ---
 st.title("🇲🇿 Elaboração de Planos de Aulas")
@@ -142,9 +149,9 @@ with col2:
     st.selectbox("Duração", ["45 Min", "90 Min"], key='tmp_duracao')
     st.text_input("Tema", placeholder="Ex: Vogais", key='tmp_tema')
 
-st.markdown("### 📚 Material de Apoio")
+st.markdown("### 📚 Material de Apoio (Opcional)")
 arquivo_enviado = st.file_uploader("Carregar PDF ou Foto do Livro", type=['pdf', 'png', 'jpg', 'jpeg'])
-comando_ia_arquivo = st.text_input("🤖 Comando para a IA sobre o ficheiro (Opcional)", placeholder="Ex: Use apenas o texto da página 10...")
+comando_ia_arquivo = st.text_input("🤖 Comando para a IA sobre o ficheiro", placeholder="Ex: Use o texto da página 5 para os exercícios...")
 
 if st.button("🚀 Gerar Plano de Aula", type="primary", use_container_width=True):
     gerar_plano(instrucoes_arquivo=comando_ia_arquivo, arquivo=arquivo_enviado)
