@@ -2,12 +2,10 @@
 # =========================================================
 # SDEJT - Planos SNE (Inhassoro) | Streamlit
 # BASE: fpdf (1.x) - estável no Streamlit Cloud
-# Melhorias:
-# 1) Regras obrigatórias:
-#    - 1ª Função (Introdução e Motivação): controlo de presenças + correcção do TPC (se houver)
-#    - Última Função (Controlo e Avaliação): marcar/atribuir TPC
-#    - Enforcer no backend (garante mesmo se a IA falhar)
-# 2) Pré-visualização do plano em imagens (PNG) antes do PDF
+# Inclui:
+# - Regras obrigatórias (presenças + correcção TPC no início; marcar TPC no fim) + enforcer
+# - Pré-visualização em imagens (PNG) antes do PDF
+# - MODO EDIÇÃO: professor pode editar objectivos e tabela antes de exportar
 # =========================================================
 
 import json
@@ -35,7 +33,7 @@ st.markdown(
 <style>
     .stApp { background-color: #0E1117; color: #FAFAFA; }
     [data-testid="stSidebar"] { background-color: #262730; }
-    .stTextInput > div > div > input, .stSelectbox > div > div > div { color: #ffffff; }
+    .stTextInput > div > div > input, .stSelectbox > div > div > div, .stTextArea textarea { color: #ffffff; }
     h1, h2, h3 { color: #FF4B4B !important; }
 </style>
 """,
@@ -139,6 +137,16 @@ class PlanoAula(BaseModel):
     objetivo_geral: str | list[str]
     objetivos_especificos: list[str] = Field(min_length=1)
     tabela: list[conlist(str, min_length=6, max_length=6)]
+
+
+TABLE_COLS = [
+    "Tempo",
+    "Função Didáctica",
+    "Actividade do Professor",
+    "Actividade do Aluno",
+    "Métodos",
+    "Meios",
+]
 
 
 def safe_extract_json(text: str) -> dict:
@@ -564,12 +572,36 @@ def create_pdf(ctx: dict, plano: PlanoAula) -> bytes:
         pdf.multi_cell(0, 6, f"{i}. {clean_text(oe)}")
     pdf.ln(4)
 
-    widths = [12, 32, 52, 52, 21, 21]  # cabe no A4
+    widths = [12, 32, 52, 52, 21, 21]  # A4
     pdf.draw_table_header(widths)
     for row in plano.tabela:
         pdf.table_row(row, widths)
 
     return pdf.output(dest="S").encode("latin-1", "replace")
+
+
+# =========================================================
+# EDIT HELPERS
+# =========================================================
+def plano_to_df(plano: PlanoAula) -> pd.DataFrame:
+    return pd.DataFrame(plano.tabela, columns=TABLE_COLS)
+
+
+def df_to_plano(df: pd.DataFrame, objetivo_geral, objetivos_especificos_list) -> PlanoAula:
+    # normaliza e garante 6 colunas/strings
+    rows = []
+    for _, r in df.iterrows():
+        row = [str(r.get(c, "") if r.get(c, "") is not None else "").strip() for c in TABLE_COLS]
+        while len(row) < 6:
+            row.append("")
+        rows.append(row[:6])
+
+    plano = PlanoAula(
+        objetivo_geral=objetivo_geral,
+        objetivos_especificos=[x.strip() for x in objetivos_especificos_list if x.strip()],
+        tabela=rows,
+    )
+    return enforce_didactic_rules(plano)
 
 
 # =========================================================
@@ -657,17 +689,21 @@ if st.button("🚀 Gerar Plano de Aula", type="primary", disabled=bool(missing))
 
             raw = safe_extract_json(texto)
             plano = PlanoAula(**raw)
-
-            # aplica regras obrigatórias (presenças+TPC no início, TPC no fim)
             plano = enforce_didactic_rules(plano)
 
-            st.session_state["plano"] = plano.model_dump()
+            # guardar base e versão editável
             st.session_state["ctx"] = ctx
             st.session_state["modelo_usado"] = modelo_usado
-            st.session_state["plano_pronto"] = True
 
-            # limpa previews antigos
+            st.session_state["plano_base"] = plano.model_dump()
+            st.session_state["plano_editado"] = plano.model_dump()
+
+            # prepara editor
+            st.session_state["editor_df"] = plano_to_df(plano)
+
+            # previews antigos fora
             st.session_state.pop("preview_imgs", None)
+            st.session_state["plano_pronto"] = True
 
         except ValidationError as ve:
             st.error("A resposta da IA não respeitou o formato esperado (JSON/estrutura).")
@@ -676,35 +712,107 @@ if st.button("🚀 Gerar Plano de Aula", type="primary", disabled=bool(missing))
         except Exception as e:
             st.error(f"Ocorreu um erro no sistema: {e}")
 
+# =========================================================
+# RESULTADO + EDIÇÃO + PREVIEW + PDF
+# =========================================================
 if st.session_state.get("plano_pronto"):
     st.divider()
     st.subheader("✅ Plano Gerado com Sucesso")
     st.caption(f"Modelo IA usado: {st.session_state.get('modelo_usado', '-')}")
 
-    plano = PlanoAula(**st.session_state["plano"])
     ctx = st.session_state["ctx"]
+    plano_editado = PlanoAula(**st.session_state["plano_editado"])
 
-    # =========================
-    # PREVIEW EM IMAGENS
-    # =========================
+    # --------- MODO EDIÇÃO ---------
+    st.subheader("✍️ Edição do Plano (antes do PDF)")
+
+    with st.expander("Editar objectivos", expanded=True):
+        # Objectivo(s) geral(is)
+        if isinstance(plano_editado.objetivo_geral, list):
+            og_text = "\n".join(plano_editado.objetivo_geral)
+            og_mode = "2 objectivos (90 Min)"
+        else:
+            og_text = str(plano_editado.objetivo_geral)
+            og_mode = "1 objectivo (45 Min)"
+
+        st.caption(f"Modo detectado: {og_mode}. Pode editar livremente.")
+        og_new = st.text_area("Objectivo(s) Geral(is) (um por linha)", value=og_text, height=100)
+
+        # Objectivos específicos
+        oe_text = "\n".join(plano_editado.objetivos_especificos)
+        oe_new = st.text_area("Objectivos Específicos (um por linha)", value=oe_text, height=130)
+
+    with st.expander("Editar tabela (actividades, métodos, meios)", expanded=True):
+        df = st.session_state.get("editor_df", plano_to_df(plano_editado))
+
+        edited_df = st.data_editor(
+            df,
+            use_container_width=True,
+            hide_index=True,
+            num_rows="dynamic",
+            key="data_editor_plano",
+        )
+
+        st.caption(
+            "Dica: mantenha exactamente as funções didácticas obrigatórias (Introdução e Motivação; Mediação e Assimilação; Domínio e Consolidação; Controlo e Avaliação)."
+        )
+
+    c_apply, c_reset = st.columns(2)
+
+    with c_apply:
+        if st.button("✅ Aplicar alterações", type="primary"):
+            # parse objectivo geral: se duracao 90 -> 2 linhas; senão -> 1 string
+            og_lines = [x.strip() for x in og_new.split("\n") if x.strip()]
+
+            if "90" in ctx["duracao"]:
+                # garante lista (até 2, mas se o professor colocar 1, aceitamos 1)
+                objetivo_geral = og_lines[:2] if og_lines else ["-"]
+            else:
+                objetivo_geral = og_lines[0] if og_lines else "-"
+
+            oe_lines = [x.strip() for x in oe_new.split("\n") if x.strip()]
+            if not oe_lines:
+                oe_lines = ["-"]
+
+            try:
+                plano_novo = df_to_plano(edited_df, objetivo_geral, oe_lines)
+                st.session_state["plano_editado"] = plano_novo.model_dump()
+                st.session_state["editor_df"] = plano_to_df(plano_novo)
+
+                # invalida preview antigo
+                st.session_state.pop("preview_imgs", None)
+                st.success("Alterações aplicadas. Pré-visualização e PDF foram actualizados.")
+            except Exception as e:
+                st.error(f"Não foi possível aplicar as alterações: {e}")
+
+    with c_reset:
+        if st.button("↩️ Repor para o plano gerado pela IA"):
+            plano_base = PlanoAula(**st.session_state["plano_base"])
+            st.session_state["plano_editado"] = plano_base.model_dump()
+            st.session_state["editor_df"] = plano_to_df(plano_base)
+            st.session_state.pop("preview_imgs", None)
+            st.success("Plano reposto para a versão original gerada.")
+
+    # --------- PREVIEW EM IMAGENS ---------
+    st.divider()
     st.subheader("👁️ Pré-visualização do Plano (Imagens)")
 
+    plano_final = PlanoAula(**st.session_state["plano_editado"])
+
     if "preview_imgs" not in st.session_state:
-        st.session_state["preview_imgs"] = plano_to_preview_images(ctx, plano)
+        st.session_state["preview_imgs"] = plano_to_preview_images(ctx, plano_final)
 
     for i, im in enumerate(st.session_state["preview_imgs"], 1):
         st.image(im, caption=f"Pré-visualização - Página {i}", use_container_width=True)
 
-    # =========================
-    # EXPORTAÇÃO PDF
-    # =========================
+    # --------- EXPORTAÇÃO PDF ---------
     st.divider()
     st.subheader("📄 Exportação")
 
     c1, c2 = st.columns(2)
     with c1:
         try:
-            pdf_bytes = create_pdf(ctx, plano)
+            pdf_bytes = create_pdf(ctx, plano_final)
             st.download_button(
                 "📄 Baixar PDF Oficial",
                 data=pdf_bytes,
@@ -718,8 +826,6 @@ if st.session_state.get("plano_pronto"):
     with c2:
         if st.button("🔄 Elaborar Novo Plano"):
             st.session_state["plano_pronto"] = False
-            st.session_state.pop("plano", None)
-            st.session_state.pop("ctx", None)
-            st.session_state.pop("preview_imgs", None)
-            st.session_state.pop("modelo_usado", None)
+            for k in ["plano_base", "plano_editado", "ctx", "modelo_usado", "preview_imgs", "editor_df", "data_editor_plano"]:
+                st.session_state.pop(k, None)
             st.rerun()
