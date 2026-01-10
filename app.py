@@ -1,17 +1,26 @@
 # app.py
 # =========================================================
 # SDEJT - Planos SNE (Inhassoro) | Streamlit
-# BASE: fpdf (1.x) - estável no Streamlit Cloud
+# BASE: fpdf (1.x) - estável no Streamlit Community Cloud
+#
+# ACESSO (novo):
+# - Qualquer professor com link: Acesso de teste (2 planos/dia)
+# - Solicitar acesso total: Nome + Escola -> fica PENDENTE
+# - Admin aprova (painel admin) -> professor vira ACESSO TOTAL (ilimitado)
+# - Admin tem acesso total/ilimitado
+#
 # Inclui:
-# - Regras obrigatórias (presenças + correcção TPC no início; marcar TPC no fim) + enforcer
+# - Regras obrigatórias na 1ª e última função didáctica + enforcer
 # - Pré-visualização em imagens (PNG) antes do PDF
-# - MODO EDIÇÃO: professor pode editar objectivos e tabela antes de exportar
+# - Edição do plano antes do PDF
 # =========================================================
 
 import json
 import time
 import hashlib
-from datetime import date
+import sqlite3
+from datetime import date, datetime
+from pathlib import Path
 
 import streamlit as st
 import pandas as pd
@@ -41,97 +50,269 @@ st.markdown(
 )
 
 # =========================================================
-# SECURITY: SIMPLE LOCKOUT
+# DB (SQLite) - pedidos e limites
 # =========================================================
-MAX_TRIES = 5
-LOCK_SECONDS = 120
+DATA_DIR = Path("data")
+DATA_DIR.mkdir(exist_ok=True)
+DB_PATH = DATA_DIR / "sdejt_access.db"
 
 
-def validate_credentials(user: str, pwd: str) -> bool:
-    if "passwords" not in st.secrets:
-        return False
-    return user in st.secrets["passwords"] and st.secrets["passwords"][user] == pwd
+def db_conn():
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    return conn
 
 
-def check_password() -> bool:
-    if st.session_state.get("password_correct", False):
-        return True
+def db_init():
+    conn = db_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            user_id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            school TEXT NOT NULL,
+            status TEXT NOT NULL,       -- trial | pending | approved | admin
+            created_at TEXT NOT NULL,
+            approved_at TEXT,
+            approved_by TEXT
+        );
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS usage (
+            user_id TEXT NOT NULL,
+            day TEXT NOT NULL,          -- YYYY-MM-DD
+            count INTEGER NOT NULL,
+            PRIMARY KEY(user_id, day)
+        );
+        """
+    )
+    conn.commit()
+    conn.close()
 
-    now = time.time()
-    locked_until = st.session_state.get("locked_until", 0)
-    if now < locked_until:
-        st.error("Acesso temporariamente bloqueado. Tente novamente mais tarde.")
-        return False
+
+db_init()
+
+
+def make_user_id(name: str, school: str) -> str:
+    raw = (name.strip().lower() + "|" + school.strip().lower()).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def get_user(user_id: str):
+    conn = db_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT user_id, name, school, status, created_at, approved_at, approved_by FROM users WHERE user_id = ?", (user_id,))
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+
+def upsert_user(user_id: str, name: str, school: str, status: str):
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn = db_conn()
+    cur = conn.cursor()
+    existing = get_user(user_id)
+    if existing is None:
+        cur.execute(
+            """
+            INSERT INTO users (user_id, name, school, status, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (user_id, name.strip(), school.strip(), status, now),
+        )
+    else:
+        # mantém created_at; actualiza nome/escola se necessário
+        cur.execute(
+            """
+            UPDATE users
+            SET name = ?, school = ?, status = ?
+            WHERE user_id = ?
+            """,
+            (name.strip(), school.strip(), status, user_id),
+        )
+    conn.commit()
+    conn.close()
+
+
+def set_user_status(user_id: str, status: str, approved_by: str | None = None):
+    conn = db_conn()
+    cur = conn.cursor()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if status == "approved":
+        cur.execute(
+            """
+            UPDATE users
+            SET status = ?, approved_at = ?, approved_by = ?
+            WHERE user_id = ?
+            """,
+            (status, now, approved_by, user_id),
+        )
+    else:
+        cur.execute("UPDATE users SET status = ? WHERE user_id = ?", (status, user_id))
+    conn.commit()
+    conn.close()
+
+
+def list_pending_requests():
+    conn = db_conn()
+    df = pd.read_sql_query(
+        "SELECT user_id, name, school, status, created_at FROM users WHERE status = 'pending' ORDER BY created_at DESC",
+        conn,
+    )
+    conn.close()
+    return df
+
+
+def list_approved_users():
+    conn = db_conn()
+    df = pd.read_sql_query(
+        "SELECT user_id, name, school, status, created_at, approved_at, approved_by FROM users WHERE status IN ('approved','admin') ORDER BY approved_at DESC",
+        conn,
+    )
+    conn.close()
+    return df
+
+
+def get_today_count(user_id: str) -> int:
+    today = date.today().isoformat()
+    conn = db_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT count FROM usage WHERE user_id = ? AND day = ?", (user_id, today))
+    row = cur.fetchone()
+    conn.close()
+    return int(row[0]) if row else 0
+
+
+def inc_today_count(user_id: str):
+    today = date.today().isoformat()
+    conn = db_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT count FROM usage WHERE user_id = ? AND day = ?", (user_id, today))
+    row = cur.fetchone()
+    if row:
+        cur.execute("UPDATE usage SET count = ? WHERE user_id = ? AND day = ?", (int(row[0]) + 1, user_id, today))
+    else:
+        cur.execute("INSERT INTO usage (user_id, day, count) VALUES (?, ?, ?)", (user_id, today, 1))
+    conn.commit()
+    conn.close()
+
+
+def is_admin_session() -> bool:
+    return st.session_state.get("is_admin", False)
+
+
+def is_unlimited_access(user_status: str) -> bool:
+    return user_status in ("approved", "admin")
+
+
+TRIAL_LIMIT_PER_DAY = 2
+
+
+def can_generate_plan(user_id: str, status: str) -> tuple[bool, str]:
+    if is_unlimited_access(status):
+        return True, ""
+    used = get_today_count(user_id)
+    if used >= TRIAL_LIMIT_PER_DAY:
+        return False, f"Limite de teste atingido: {TRIAL_LIMIT_PER_DAY} planos por dia. Solicite acesso total."
+    return True, ""
+
+
+# =========================================================
+# LOGIN/ACESSO (novo)
+# =========================================================
+def access_gate() -> dict:
+    """
+    Retorna dict com:
+    - user_id, name, school, status
+    - is_admin
+    """
+    # Admin login pequeno no sidebar
+    with st.sidebar:
+        st.markdown("### Administração")
+        admin_pwd = st.text_input("Senha do Administrador", type="password", key="admin_pwd")
+        if st.button("Entrar como Admin", key="admin_login_btn"):
+            if "ADMIN_PASSWORD" not in st.secrets:
+                st.error("ADMIN_PASSWORD não configurada nos Secrets.")
+            elif admin_pwd == st.secrets["ADMIN_PASSWORD"]:
+                st.session_state["is_admin"] = True
+                st.success("Sessão de Administrador activa.")
+            else:
+                st.error("Senha de administrador inválida.")
+
+        if st.session_state.get("is_admin"):
+            if st.button("Sair do Admin", key="admin_logout_btn"):
+                st.session_state["is_admin"] = False
+                st.session_state.pop("admin_pwd", None)
+                st.rerun()
 
     st.markdown("## 🇲🇿 SDEJT - Elaboração de Planos")
     st.markdown("##### Serviço Distrital de Educação, Juventude e Tecnologia - Inhassoro")
     st.divider()
 
-    col1, col2 = st.columns([1, 1])
+    col1, col2 = st.columns([1.2, 0.8])
 
     with col1:
-        st.info("🔐 Acesso Restrito")
-        usuario = st.text_input("Utilizador", key="login_user").strip()
-        senha = st.text_input("Senha", type="password", key="login_pwd")
+        st.info("👤 Identificação do Professor (obrigatório)")
+        name = st.text_input("Nome do Professor", key="prof_name").strip()
+        school = st.text_input("Escola onde lecciona", key="prof_school").strip()
 
-        if st.button("Entrar", type="primary"):
-            ok = validate_credentials(usuario, senha)
-            if ok:
-                st.session_state["password_correct"] = True
-                st.session_state["user_name"] = usuario
-                st.session_state["tries"] = 0
+        if not name or not school:
+            st.warning("Introduza o seu nome e a escola onde lecciona para continuar.")
+            st.stop()
+
+        user_id = make_user_id(name, school)
+
+        # cria utilizador se não existir (trial)
+        row = get_user(user_id)
+        if row is None:
+            upsert_user(user_id, name, school, "trial")
+            row = get_user(user_id)
+
+        status = row[3]  # status
+
+        # Se for admin, garantir status admin no registo (para ficar ilimitado)
+        if is_admin_session():
+            if status != "admin":
+                upsert_user(user_id, name, school, "admin")
+                status = "admin"
+
+        # Painel rápido do estado
+        if status == "trial":
+            used = get_today_count(user_id)
+            st.success(f"Acesso de teste activo. Já gerou **{used}/{TRIAL_LIMIT_PER_DAY}** planos hoje.")
+        elif status == "pending":
+            st.warning("Pedido de acesso total em análise pelo Administrador. Enquanto isso, mantém-se o limite de teste.")
+            used = get_today_count(user_id)
+            st.info(f"Hoje: **{used}/{TRIAL_LIMIT_PER_DAY}** planos usados.")
+        elif status in ("approved", "admin"):
+            st.success("Acesso total activo (ilimitado).")
+
+        # Botão de solicitar acesso total
+        if status in ("trial", "pending"):
+            st.markdown("### Acesso Total")
+            st.write("Para ter acesso total e ilimitado, envie o pedido ao Administrador.")
+            if st.button("📝 Solicitar Acesso Total", type="primary", key="request_full_access"):
+                # marca como pendente
+                upsert_user(user_id, name, school, "pending")
+                st.success("Pedido enviado. Aguarde aprovação do Administrador.")
                 st.rerun()
-            else:
-                tries = st.session_state.get("tries", 0) + 1
-                st.session_state["tries"] = tries
-                st.error("Credenciais inválidas.")
-                if tries >= MAX_TRIES:
-                    st.session_state["locked_until"] = now + LOCK_SECONDS
 
     with col2:
-        st.warning("⚠️ Suporte / Aquisição de Acesso")
-        st.markdown("**Precisa de acesso?**")
-        st.write("Clique no botão abaixo para solicitar ao Administrador:")
-
-        meu_numero = "258867926665"
-        mensagem = "Saudações técnico Nzualo. Gostaria de solicitar acesso ao Gerador de Planos de Aulas."
-        link_zap = f"https://wa.me/{meu_numero}?text={mensagem.replace(' ', '%20')}"
-
-        st.markdown(
-            f"""
-            <a href="{link_zap}" target="_blank" style="text-decoration: none;">
-                <button style="
-                    background-color:#25D366;
-                    color:white;
-                    border:none;
-                    padding:15px 25px;
-                    border-radius:8px;
-                    width:100%;
-                    cursor:pointer;
-                    font-size: 16px;
-                    font-weight:bold;">
-                    📱 Falar no WhatsApp
-                </button>
-            </a>
-            """,
-            unsafe_allow_html=True,
+        st.warning("ℹ️ Ajuda")
+        st.write(
+            "No modo de teste pode gerar até **2 planos por dia**. "
+            "Depois de aprovado pelo Administrador, o acesso é **ilimitado**."
         )
+        st.write("Para suporte: contacte o Administrador do SDEJT.")
 
-    return False
-
-
-if not check_password():
-    st.stop()
-
-with st.sidebar:
-    st.success(f"👤 Técnico: **{st.session_state['user_name']}**")
-    if st.button("Sair"):
-        st.session_state["password_correct"] = False
-        st.rerun()
+    return {"user_id": user_id, "name": name, "school": school, "status": status, "is_admin": is_admin_session()}
 
 
 # =========================================================
-# DATA MODEL (JSON STRICT)
+# MODELO (JSON STRICT)
 # =========================================================
 class PlanoAula(BaseModel):
     objetivo_geral: str | list[str]
@@ -242,7 +423,7 @@ FORMATO JSON:
 
 
 # =========================================================
-# ENFORCER: garante as regras pedagógicas mesmo se a IA falhar
+# ENFORCER (regras obrigatórias)
 # =========================================================
 def contains_any(text: str, terms: list[str]) -> bool:
     t = (text or "").lower()
@@ -266,7 +447,6 @@ def enforce_didactic_rules(plano: PlanoAula) -> PlanoAula:
             controlo_idx = i
             break
 
-    # Função 1: chamada + correcção do TPC
     if intro_idx is not None:
         row = plano.tabela[intro_idx]
         prof = row[2] or ""
@@ -284,7 +464,6 @@ def enforce_didactic_rules(plano: PlanoAula) -> PlanoAula:
 
         plano.tabela[intro_idx] = [row[0], row[1], prof, aluno, row[4], row[5]]
 
-    # Função 4: marcar TPC
     if controlo_idx is not None:
         row = plano.tabela[controlo_idx]
         prof = row[2] or ""
@@ -301,7 +480,7 @@ def enforce_didactic_rules(plano: PlanoAula) -> PlanoAula:
 
 
 # =========================================================
-# PREVIEW IMAGES (PNG) - antes do PDF
+# PREVIEW IMAGES (PNG)
 # =========================================================
 def wrap_text(draw, text, font, max_width):
     words = (text or "").split()
@@ -320,7 +499,7 @@ def wrap_text(draw, text, font, max_width):
 
 
 def plano_to_preview_images(ctx: dict, plano: PlanoAula) -> list[Image.Image]:
-    W, H = 1240, 1754  # A4 approx @150dpi
+    W, H = 1240, 1754  # A4 ~150dpi
     margin = 60
     img_list = []
 
@@ -398,7 +577,7 @@ def plano_to_preview_images(ctx: dict, plano: PlanoAula) -> list[Image.Image]:
 
     img_list.append(img)
 
-    # Página(s) da tabela
+    # Tabela
     headers = ["Tempo", "Função Didáctica", "Activ. Professor", "Activ. Aluno", "Métodos", "Meios"]
     col_w = [90, 210, 300, 300, 160, 160]  # total 1220
     start_x = margin
@@ -419,14 +598,12 @@ def plano_to_preview_images(ctx: dict, plano: PlanoAula) -> list[Image.Image]:
 
     for row in plano.tabela:
         cells = [str(c or "-") for c in row]
-
         wrapped = []
         max_lines = 1
         for i, c in enumerate(cells):
             lines = wrap_text(draw, c, font_s, col_w[i] - 12)
             wrapped.append(lines)
             max_lines = max(max_lines, len(lines))
-
         needed_h = max(30, 8 + max_lines * row_h)
 
         if y + needed_h > H - margin:
@@ -444,7 +621,6 @@ def plano_to_preview_images(ctx: dict, plano: PlanoAula) -> list[Image.Image]:
                 draw.text((x + 6, yy), ln, font=font_s, fill="black")
                 yy += row_h
             x += col_w[i]
-
         y += needed_h
 
     img_list.append(img)
@@ -588,7 +764,6 @@ def plano_to_df(plano: PlanoAula) -> pd.DataFrame:
 
 
 def df_to_plano(df: pd.DataFrame, objetivo_geral, objetivos_especificos_list) -> PlanoAula:
-    # normaliza e garante 6 colunas/strings
     rows = []
     for _, r in df.iterrows():
         row = [str(r.get(c, "") if r.get(c, "") is not None else "").strip() for c in TABLE_COLS]
@@ -605,15 +780,63 @@ def df_to_plano(df: pd.DataFrame, objetivo_geral, objetivos_especificos_list) ->
 
 
 # =========================================================
-# APP UI
+# APP START: ACCESS GATE
+# =========================================================
+if "GOOGLE_API_KEY" not in st.secrets:
+    st.error("⚠️ ERRO: Configure GOOGLE_API_KEY nos Secrets!")
+    st.stop()
+if "ADMIN_PASSWORD" not in st.secrets:
+    st.error("⚠️ ERRO: Configure ADMIN_PASSWORD nos Secrets!")
+    st.stop()
+
+access = access_gate()  # name+school obrigatório
+USER_ID = access["user_id"]
+USER_STATUS = access["status"]
+IS_ADMIN = access["is_admin"]
+
+# =========================================================
+# ADMIN PANEL
+# =========================================================
+if IS_ADMIN:
+    with st.sidebar:
+        st.markdown("---")
+        st.markdown("### Painel do Administrador")
+        tab1, tab2 = st.tabs(["Pedidos Pendentes", "Utilizadores Aprovados"])
+
+        with tab1:
+            pending = list_pending_requests()
+            if pending.empty:
+                st.info("Sem pedidos pendentes.")
+            else:
+                st.dataframe(pending, hide_index=True, use_container_width=True)
+                st.caption("Seleccione um pedido e aprove.")
+
+                sel = st.selectbox(
+                    "Seleccionar pedido (user_id)",
+                    options=pending["user_id"].tolist(),
+                    index=0,
+                    key="pending_select",
+                )
+                if st.button("✅ Aprovar Acesso Total", key="approve_btn", type="primary"):
+                    set_user_status(sel, "approved", approved_by=access["name"])
+                    st.success("Acesso total aprovado.")
+                    st.rerun()
+
+        with tab2:
+            approved = list_approved_users()
+            if approved.empty:
+                st.info("Ainda não há utilizadores aprovados.")
+            else:
+                st.dataframe(approved, hide_index=True, use_container_width=True)
+
+
+# =========================================================
+# MAIN APP UI
 # =========================================================
 st.title("🇲🇿 Elaboração de Planos de Aulas (SNE)")
 
-if "GOOGLE_API_KEY" not in st.secrets:
-    st.error("⚠️ ERRO: Configure a Chave de API nos Secrets!")
-    st.stop()
-
 with st.sidebar:
+    st.markdown("---")
     st.markdown("### Contexto da Escola (Inhassoro)")
     localidade = st.text_input("Posto/Localidade", "Inhassoro (Sede)")
     tipo_escola = st.selectbox("Tipo de escola", ["EPC", "ESG1", "ESG2", "Outra"])
@@ -623,11 +846,15 @@ with st.sidebar:
         "Observações da turma",
         "Turma heterogénea; alguns alunos com dificuldades de leitura/escrita.",
     )
+    st.markdown("---")
+    st.success(f"Professor: {access['name']}")
+    st.info(f"Escola: {access['school']}")
+    st.caption(f"Estado: {USER_STATUS}")
 
 col1, col2 = st.columns(2)
 with col1:
-    escola = st.text_input("Escola", "EPC de Inhassoro")
-    professor = st.text_input("Professor", st.session_state.get("user_name", ""))
+    escola = st.text_input("Escola", access["school"])
+    professor = st.text_input("Professor", access["name"])
     disciplina = st.text_input("Disciplina", "Língua Portuguesa")
     classe = st.selectbox(
         "Classe",
@@ -654,7 +881,16 @@ if not tema.strip():
 if missing:
     st.warning(f"Preencha: {', '.join(missing)}")
 
+
+# =========================================================
+# GENERATE
+# =========================================================
 if st.button("🚀 Gerar Plano de Aula", type="primary", disabled=bool(missing)):
+    allowed, msg = can_generate_plan(USER_ID, USER_STATUS)
+    if not allowed:
+        st.error(msg)
+        st.stop()
+
     with st.spinner("A processar o plano com Inteligência Artificial..."):
         try:
             genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
@@ -691,19 +927,22 @@ if st.button("🚀 Gerar Plano de Aula", type="primary", disabled=bool(missing))
             plano = PlanoAula(**raw)
             plano = enforce_didactic_rules(plano)
 
-            # guardar base e versão editável
+            # Contabiliza uso APENAS se não for ilimitado
+            if not is_unlimited_access(USER_STATUS):
+                inc_today_count(USER_ID)
+
+            # salvar base e editável
             st.session_state["ctx"] = ctx
             st.session_state["modelo_usado"] = modelo_usado
-
             st.session_state["plano_base"] = plano.model_dump()
             st.session_state["plano_editado"] = plano.model_dump()
-
-            # prepara editor
             st.session_state["editor_df"] = plano_to_df(plano)
 
-            # previews antigos fora
+            # invalida previews
             st.session_state.pop("preview_imgs", None)
             st.session_state["plano_pronto"] = True
+
+            st.rerun()
 
         except ValidationError as ve:
             st.error("A resposta da IA não respeitou o formato esperado (JSON/estrutura).")
@@ -711,6 +950,7 @@ if st.button("🚀 Gerar Plano de Aula", type="primary", disabled=bool(missing))
             st.code(texto)
         except Exception as e:
             st.error(f"Ocorreu um erro no sistema: {e}")
+
 
 # =========================================================
 # RESULTADO + EDIÇÃO + PREVIEW + PDF
@@ -723,11 +963,10 @@ if st.session_state.get("plano_pronto"):
     ctx = st.session_state["ctx"]
     plano_editado = PlanoAula(**st.session_state["plano_editado"])
 
-    # --------- MODO EDIÇÃO ---------
+    # EDIÇÃO
     st.subheader("✍️ Edição do Plano (antes do PDF)")
 
     with st.expander("Editar objectivos", expanded=True):
-        # Objectivo(s) geral(is)
         if isinstance(plano_editado.objetivo_geral, list):
             og_text = "\n".join(plano_editado.objetivo_geral)
             og_mode = "2 objectivos (90 Min)"
@@ -738,13 +977,11 @@ if st.session_state.get("plano_pronto"):
         st.caption(f"Modo detectado: {og_mode}. Pode editar livremente.")
         og_new = st.text_area("Objectivo(s) Geral(is) (um por linha)", value=og_text, height=100)
 
-        # Objectivos específicos
         oe_text = "\n".join(plano_editado.objetivos_especificos)
         oe_new = st.text_area("Objectivos Específicos (um por linha)", value=oe_text, height=130)
 
     with st.expander("Editar tabela (actividades, métodos, meios)", expanded=True):
         df = st.session_state.get("editor_df", plano_to_df(plano_editado))
-
         edited_df = st.data_editor(
             df,
             use_container_width=True,
@@ -752,20 +989,16 @@ if st.session_state.get("plano_pronto"):
             num_rows="dynamic",
             key="data_editor_plano",
         )
-
         st.caption(
-            "Dica: mantenha exactamente as funções didácticas obrigatórias (Introdução e Motivação; Mediação e Assimilação; Domínio e Consolidação; Controlo e Avaliação)."
+            "Mantenha as funções obrigatórias. O sistema força: chamada + correcção TPC na 1ª função, e marcação de TPC na última."
         )
 
     c_apply, c_reset = st.columns(2)
 
     with c_apply:
         if st.button("✅ Aplicar alterações", type="primary"):
-            # parse objectivo geral: se duracao 90 -> 2 linhas; senão -> 1 string
             og_lines = [x.strip() for x in og_new.split("\n") if x.strip()]
-
             if "90" in ctx["duracao"]:
-                # garante lista (até 2, mas se o professor colocar 1, aceitamos 1)
                 objetivo_geral = og_lines[:2] if og_lines else ["-"]
             else:
                 objetivo_geral = og_lines[0] if og_lines else "-"
@@ -778,10 +1011,9 @@ if st.session_state.get("plano_pronto"):
                 plano_novo = df_to_plano(edited_df, objetivo_geral, oe_lines)
                 st.session_state["plano_editado"] = plano_novo.model_dump()
                 st.session_state["editor_df"] = plano_to_df(plano_novo)
-
-                # invalida preview antigo
                 st.session_state.pop("preview_imgs", None)
                 st.success("Alterações aplicadas. Pré-visualização e PDF foram actualizados.")
+                st.rerun()
             except Exception as e:
                 st.error(f"Não foi possível aplicar as alterações: {e}")
 
@@ -792,20 +1024,20 @@ if st.session_state.get("plano_pronto"):
             st.session_state["editor_df"] = plano_to_df(plano_base)
             st.session_state.pop("preview_imgs", None)
             st.success("Plano reposto para a versão original gerada.")
+            st.rerun()
 
-    # --------- PREVIEW EM IMAGENS ---------
+    # PREVIEW
     st.divider()
     st.subheader("👁️ Pré-visualização do Plano (Imagens)")
 
     plano_final = PlanoAula(**st.session_state["plano_editado"])
-
     if "preview_imgs" not in st.session_state:
         st.session_state["preview_imgs"] = plano_to_preview_images(ctx, plano_final)
 
     for i, im in enumerate(st.session_state["preview_imgs"], 1):
         st.image(im, caption=f"Pré-visualização - Página {i}", use_container_width=True)
 
-    # --------- EXPORTAÇÃO PDF ---------
+    # PDF
     st.divider()
     st.subheader("📄 Exportação")
 
@@ -826,6 +1058,14 @@ if st.session_state.get("plano_pronto"):
     with c2:
         if st.button("🔄 Elaborar Novo Plano"):
             st.session_state["plano_pronto"] = False
-            for k in ["plano_base", "plano_editado", "ctx", "modelo_usado", "preview_imgs", "editor_df", "data_editor_plano"]:
+            for k in [
+                "plano_base",
+                "plano_editado",
+                "ctx",
+                "modelo_usado",
+                "preview_imgs",
+                "editor_df",
+                "data_editor_plano",
+            ]:
                 st.session_state.pop(k, None)
             st.rerun()
