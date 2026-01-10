@@ -4,4 +4,4 @@ pandas
 pydantic
 fpdf
 Pillow
-
+supabase
