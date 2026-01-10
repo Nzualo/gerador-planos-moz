@@ -1,7 +1,7 @@
 # app.py
 # =========================================================
 # SDEJT - Planos SNE (Inhassoro) | Streamlit
-# Saída IA em JSON estrito + validação + contexto local + PDF UTF-8 (fpdf2)
+# JSON estrito + validação + contexto local + PDF UTF-8 (fpdf2)
 # =========================================================
 
 import json
@@ -34,7 +34,6 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
-
 
 # =========================================================
 # SECURITY: SIMPLE LOCKOUT
@@ -129,7 +128,7 @@ with st.sidebar:
 
 
 # =========================================================
-# MODEL (STRICT JSON)
+# DATA MODEL (JSON STRICT)
 # =========================================================
 class PlanoAula(BaseModel):
     objetivo_geral: str | list[str]
@@ -138,9 +137,6 @@ class PlanoAula(BaseModel):
 
 
 def safe_extract_json(text: str) -> dict:
-    """
-    Extrai JSON mesmo se o modelo devolver texto antes/depois.
-    """
     text = (text or "").strip()
     try:
         return json.loads(text)
@@ -226,6 +222,7 @@ FORMATO DO JSON (exemplo):
 
 # =========================================================
 # PDF UTF-8 (FPDF2 + TTF)
+# IMPORTANT: add_font BEFORE add_page (because header() uses fonts)
 # =========================================================
 FONT_REGULAR = Path(__file__).parent / "DejaVuSans.ttf"
 FONT_BOLD = Path(__file__).parent / "DejaVuSans-Bold.ttf"
@@ -246,7 +243,14 @@ class PDF(FPDF):
     def footer(self):
         self.set_y(-15)
         self.set_font("DejaVu", "", 7)
-        self.cell(0, 10, "SDEJT Inhassoro - Processado por IA (validação final: Professor)", 0, 0, "C")
+        self.cell(
+            0,
+            10,
+            "SDEJT Inhassoro - Processado por IA (validação final: Professor)",
+            0,
+            0,
+            "C",
+        )
 
     def draw_table_header(self, widths):
         headers = ["TEMPO", "F. DIDÁTICA", "ACTIV. PROFESSOR", "ACTIV. ALUNO", "MÉTODOS", "MEIOS"]
@@ -292,10 +296,12 @@ def create_pdf(ctx: dict, plano: PlanoAula) -> bytes:
 
     pdf = PDF()
     pdf.set_auto_page_break(auto=False)
-    pdf.add_page()
 
+    # REGISTAR FONTES ANTES DE add_page() (porque header() usa as fontes)
     pdf.add_font("DejaVu", "", str(FONT_REGULAR), uni=True)
     pdf.add_font("DejaVu", "B", str(FONT_BOLD), uni=True)
+
+    pdf.add_page()  # header() agora não falha
 
     pdf.set_font("DejaVu", "", 10)
     pdf.cell(130, 7, f"Escola: {ctx['escola']}", 0, 0)
@@ -316,7 +322,6 @@ def create_pdf(ctx: dict, plano: PlanoAula) -> bytes:
     pdf.line(10, pdf.get_y() + 2, 200, pdf.get_y() + 2)
     pdf.ln(5)
 
-    # Objectivo(s) geral(is)
     pdf.set_font("DejaVu", "B", 10)
     pdf.cell(0, 6, "OBJECTIVO(S) GERAL(IS):", 0, 1)
     pdf.set_font("DejaVu", "", 10)
@@ -327,7 +332,6 @@ def create_pdf(ctx: dict, plano: PlanoAula) -> bytes:
         pdf.multi_cell(0, 6, plano.objetivo_geral)
     pdf.ln(2)
 
-    # Objectivos específicos
     pdf.set_font("DejaVu", "B", 10)
     pdf.cell(0, 6, "OBJECTIVOS ESPECÍFICOS:", 0, 1)
     pdf.set_font("DejaVu", "", 10)
@@ -335,18 +339,16 @@ def create_pdf(ctx: dict, plano: PlanoAula) -> bytes:
         pdf.multi_cell(0, 6, f"{i}. {oe}")
     pdf.ln(4)
 
-    # Tabela
     widths = [12, 40, 50, 50, 20, 20]
     pdf.draw_table_header(widths)
     for row in plano.tabela:
         pdf.table_row(row, widths)
 
-    # fpdf2 devolve str; converter para bytes
     return pdf.output(dest="S").encode("latin-1", "replace")
 
 
 # =========================================================
-# APP
+# APP UI
 # =========================================================
 st.title("🇲🇿 Elaboração de Planos de Aulas (SNE)")
 
@@ -366,8 +368,7 @@ with st.sidebar:
         "Turma heterogénea; alguns alunos com dificuldades de leitura/escrita.",
     )
     st.markdown("---")
-    st.caption("Nota: Coloque as fontes DejaVuSans.ttf e DejaVuSans-Bold.ttf junto do app.py para PDF UTF-8.")
-
+    st.caption("PDF UTF-8: DejaVuSans.ttf e DejaVuSans-Bold.ttf devem estar junto do app.py.")
 
 # Inputs principais
 col1, col2 = st.columns(2)
@@ -400,7 +401,7 @@ if not tema.strip():
 if missing:
     st.warning(f"Preencha: {', '.join(missing)}")
 
-# Geração
+# Generate
 if st.button("🚀 Gerar Plano de Aula", type="primary", disabled=bool(missing)):
     with st.spinner("A processar o plano com Inteligência Artificial..."):
         try:
@@ -435,7 +436,7 @@ if st.button("🚀 Gerar Plano de Aula", type="primary", disabled=bool(missing))
                 modelo_usado = "gemini-1.5-flash"
 
             raw = safe_extract_json(texto)
-            plano = PlanoAula(**raw)  # validação estrita
+            plano = PlanoAula(**raw)
 
             st.session_state["plano"] = plano.model_dump()
             st.session_state["ctx"] = ctx
@@ -449,7 +450,7 @@ if st.button("🚀 Gerar Plano de Aula", type="primary", disabled=bool(missing))
         except Exception as e:
             st.error(f"Ocorreu um erro no sistema: {e}")
 
-# Resultado
+# Output
 if st.session_state.get("plano_pronto"):
     st.divider()
     st.subheader("✅ Plano Gerado com Sucesso")
