@@ -2,7 +2,7 @@
 # =========================================================
 # SDEJT - Planos SNE (Inhassoro) | Streamlit
 # JSON estrito + validação + contexto local + PDF UTF-8 (fpdf2)
-# Fix definitivo do erro: "Not enough horizontal space to render a single character"
+# FIX DEFINITIVO: PDF HORIZONTAL (Landscape) + larguras dinâmicas + quebra de tokens longos
 # =========================================================
 
 import json
@@ -178,7 +178,7 @@ REGRAS RIGOROSAS:
 1) Devolve APENAS JSON válido (sem texto antes/depois).
 2) Campos obrigatórios: "objetivo_geral", "objetivos_especificos", "tabela".
 3) Tabela com EXACTAMENTE 6 colunas:
-   ["tempo", "funcao_didatica", "actividade_professor", "actividade_aluno", "metodos", "meios"]
+   ["tempo","funcao_didatica","actividade_professor","actividade_aluno","metodos","meios"]
 4) Funções didácticas obrigatórias e na ordem:
    - Introdução e Motivação
    - Mediação e Assimilação
@@ -220,32 +220,23 @@ FORMATO JSON:
 
 
 # =========================================================
-# PDF UTF-8 (FPDF2 + TTF)
-# FIX DEFINITIVO: margens + epw + x no l_margin + quebra de palavras longas
+# PDF UTF-8 (FPDF2 + TTF) - LANDSCAPE
 # =========================================================
 FONT_REGULAR = Path(__file__).parent / "DejaVuSans.ttf"
 FONT_BOLD = Path(__file__).parent / "DejaVuSans-Bold.ttf"
-
-# pesos base (serão escalados pelo epw)
-BASE_WIDTHS = [12, 32, 48, 48, 25, 25]  # soma 190 (referência)
 
 
 def sanitize_cell(text: str) -> str:
     t = str(text or "")
     t = t.replace("\r", " ").replace("\n", " ")
-    t = " ".join(t.split())  # normaliza espaços
-    # melhora quebras: após pontos e dois-pontos coloca espaço
+    t = " ".join(t.split())
+    # ajuda na quebra
     t = t.replace("1.", "1. ").replace("2.", "2. ").replace("3.", "3. ").replace("4.", "4. ")
     t = t.replace(":", ": ").replace(";", "; ")
-    t = " ".join(t.split())
-    return t.strip()
+    return " ".join(t.split()).strip()
 
 
 def break_long_words(text: str, max_word_len: int = 28) -> str:
-    """
-    Quebra palavras/tokens muito longos sem espaços para evitar erro do fpdf2.
-    Insere um espaço a cada max_word_len caracteres quando necessário.
-    """
     words = text.split(" ")
     out = []
     for w in words:
@@ -264,19 +255,19 @@ class PDF(FPDF):
         self.set_font("DejaVu", "B", 10)
         self.cell(0, 5, "GOVERNO DO DISTRITO DE INHASSORO", 0, 1, "C")
         self.cell(0, 5, "SERVIÇO DISTRITAL DE EDUCAÇÃO, JUVENTUDE E TECNOLOGIA", 0, 1, "C")
-        self.ln(5)
+        self.ln(4)
         self.set_font("DejaVu", "B", 14)
-        self.cell(0, 10, "PLANO DE AULA", 0, 1, "C")
-        self.ln(2)
+        self.cell(0, 9, "PLANO DE AULA", 0, 1, "C")
+        self.ln(1)
 
     def footer(self):
-        self.set_y(-15)
+        self.set_y(-12)
         self.set_font("DejaVu", "", 7)
-        self.cell(0, 10, "SDEJT Inhassoro - Processado por IA (validação final: Professor)", 0, 0, "C")
+        self.cell(0, 8, "SDEJT Inhassoro - Processado por IA (validação final: Professor)", 0, 0, "C")
 
     def draw_table_header(self, widths):
         headers = ["TEMPO", "F. DIDÁTICA", "ACTIV. PROFESSOR", "ACTIV. ALUNO", "MÉTODOS", "MEIOS"]
-        self.set_x(self.l_margin)  # FIX: garante início na margem esquerda
+        self.set_x(self.l_margin)
         self.set_font("DejaVu", "B", 8)
         self.set_fill_color(220, 220, 220)
         for i, h in enumerate(headers):
@@ -288,13 +279,9 @@ class PDF(FPDF):
 
         row = []
         for x in data:
-            txt = sanitize_cell(x)
-            txt = break_long_words(txt, 28)
-            if txt == "":
-                txt = "-"
-            row.append(txt)
+            txt = break_long_words(sanitize_cell(x), 28)
+            row.append(txt if txt else "-")
 
-        # mede linhas
         max_lines = 1
         for i, txt in enumerate(row):
             lines = self.multi_cell(widths[i], 4, txt, split_only=True)
@@ -302,38 +289,47 @@ class PDF(FPDF):
 
         height = max_lines * 4 + 4
 
-        if self.get_y() + height > 270:
+        # Landscape: altura útil maior, mas ainda controlamos quebra
+        if self.get_y() + height > (self.h - self.b_margin - 10):
             self.add_page()
             self.draw_table_header(widths)
 
         y_start = self.get_y()
-        x_start = self.l_margin  # FIX: não depende do get_x()
+        x = self.l_margin
 
-        # escreve células
         for i, txt in enumerate(row):
-            self.set_xy(x_start, y_start)
+            self.set_xy(x, y_start)
             self.multi_cell(widths[i], 4, txt, border=0, align="L")
-            x_start += widths[i]
+            x += widths[i]
 
-        # desenha bordas
-        self.set_xy(self.l_margin, y_start)
-        x_curr = self.l_margin
+        # bordas
+        x = self.l_margin
         for w in widths:
-            self.rect(x_curr, y_start, w, height)
-            x_curr += w
+            self.rect(x, y_start, w, height)
+            x += w
 
         self.set_y(y_start + height)
 
 
-def compute_widths(pdf: FPDF) -> list[float]:
+def compute_widths_landscape(pdf: FPDF) -> list[float]:
     """
-    Calcula larguras dinâmicas com base no epw (effective page width),
-    para nunca ultrapassar as margens.
+    Larguras dinâmicas com base no epw do Landscape.
+    Distribuição dá mais espaço às colunas longas.
     """
     epw = pdf.w - pdf.l_margin - pdf.r_margin
-    base_sum = sum(BASE_WIDTHS)
-    scale = epw / base_sum
-    return [w * scale for w in BASE_WIDTHS]
+
+    # pesos por coluna: tempo, função, prof, aluno, métodos, meios
+    weights = [8, 18, 36, 36, 16, 16]  # soma 130
+    total = sum(weights)
+    widths = [epw * (w / total) for w in weights]
+
+    # garante que a coluna "Tempo" não fica minúscula
+    widths[0] = max(widths[0], 14)
+
+    # reajusta para continuar a somar epw
+    diff = epw - sum(widths)
+    widths[-1] += diff
+    return widths
 
 
 def create_pdf(ctx: dict, plano: PlanoAula) -> bytes:
@@ -342,20 +338,19 @@ def create_pdf(ctx: dict, plano: PlanoAula) -> bytes:
             "Faltam as fontes TTF. Coloque DejaVuSans.ttf e DejaVuSans-Bold.ttf no mesmo directório do app.py"
         )
 
-    pdf = PDF()
-
-    # FIX: margens explícitas (não depender de defaults)
+    # LANDSCAPE
+    pdf = PDF(orientation="L", format="A4")
     pdf.set_margins(10, 10, 10)
+    pdf.set_auto_page_break(auto=False)
 
-    # FIX: registar fontes ANTES de add_page (porque header usa DejaVu)
+    # fontes antes de add_page()
     pdf.add_font("DejaVu", "", str(FONT_REGULAR), uni=True)
     pdf.add_font("DejaVu", "B", str(FONT_BOLD), uni=True)
 
-    pdf.set_auto_page_break(auto=False)
     pdf.add_page()
 
     pdf.set_font("DejaVu", "", 10)
-    pdf.cell(130, 7, f"Escola: {sanitize_cell(ctx['escola'])}", 0, 0)
+    pdf.cell(170, 7, f"Escola: {sanitize_cell(ctx['escola'])}", 0, 0)
     pdf.cell(0, 7, f"Data: {sanitize_cell(ctx['data'])}", 0, 1)
 
     pdf.cell(0, 7, f"Unidade Temática: {sanitize_cell(ctx['unidade'])}", 0, 1)
@@ -363,11 +358,11 @@ def create_pdf(ctx: dict, plano: PlanoAula) -> bytes:
     pdf.cell(0, 7, f"Tema: {sanitize_cell(ctx['tema'])}", 0, 1)
 
     pdf.set_font("DejaVu", "", 10)
-    pdf.cell(100, 7, f"Professor: {sanitize_cell(ctx['professor'])}", 0, 0)
-    pdf.cell(50, 7, f"Turma: {sanitize_cell(ctx['turma'])}", 0, 0)
+    pdf.cell(120, 7, f"Professor: {sanitize_cell(ctx['professor'])}", 0, 0)
+    pdf.cell(60, 7, f"Turma: {sanitize_cell(ctx['turma'])}", 0, 0)
     pdf.cell(0, 7, f"Duração: {sanitize_cell(ctx['duracao'])}", 0, 1)
 
-    pdf.cell(100, 7, f"Tipo de Aula: {sanitize_cell(ctx['tipo_aula'])}", 0, 0)
+    pdf.cell(120, 7, f"Tipo de Aula: {sanitize_cell(ctx['tipo_aula'])}", 0, 0)
     pdf.cell(0, 7, f"Nº de alunos: {sanitize_cell(ctx['nr_alunos'])}", 0, 1)
 
     pdf.line(pdf.l_margin, pdf.get_y() + 2, pdf.w - pdf.r_margin, pdf.get_y() + 2)
@@ -393,8 +388,9 @@ def create_pdf(ctx: dict, plano: PlanoAula) -> bytes:
 
     pdf.ln(4)
 
-    widths = compute_widths(pdf)  # FIX: larguras sempre cabem no epw
+    widths = compute_widths_landscape(pdf)
     pdf.draw_table_header(widths)
+
     for row in plano.tabela:
         pdf.table_row(row, widths)
 
@@ -416,12 +412,9 @@ with st.sidebar:
     tipo_escola = st.selectbox("Tipo de escola", ["EPC", "ESG1", "ESG2", "Outra"])
     recursos = st.text_area("Recursos disponíveis", "Quadro, giz/marcador, livros, cadernos.")
     nr_alunos = st.text_input("Nº de alunos", "40 (aprox.)")
-    obs_turma = st.text_area(
-        "Observações da turma",
-        "Turma heterogénea; alguns alunos com dificuldades de leitura/escrita.",
-    )
+    obs_turma = st.text_area("Observações da turma", "Turma heterogénea; alguns alunos com dificuldades de leitura/escrita.")
     st.markdown("---")
-    st.caption("PDF: confirme DejaVuSans.ttf e DejaVuSans-Bold.ttf junto do app.py.")
+    st.caption("PDF horizontal (Landscape). Confirme as fontes DejaVu junto do app.py.")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -524,9 +517,9 @@ if st.session_state.get("plano_pronto"):
         try:
             pdf_bytes = create_pdf(ctx, plano)
             st.download_button(
-                "📄 Baixar PDF Oficial",
+                "📄 Baixar PDF Oficial (Horizontal)",
                 data=pdf_bytes,
-                file_name=f"Plano_{ctx['disciplina']}_{ctx['classe']}_{ctx['tema']}.pdf".replace(" ", "_"),
+                file_name=f"Plano_{ctx['disciplina']}_{ctx['classe']}_{ctx['tema']}_H.pdf".replace(" ", "_"),
                 mime="application/pdf",
                 type="primary",
             )
