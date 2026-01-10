@@ -2,6 +2,7 @@
 # =========================================================
 # SDEJT - Planos SNE (Inhassoro) | Streamlit
 # JSON estrito + validação + contexto local + PDF UTF-8 (fpdf2)
+# Corrigido: fontes antes de add_page + larguras da tabela (190mm) + texto seguro
 # =========================================================
 
 import json
@@ -222,10 +223,23 @@ FORMATO DO JSON (exemplo):
 
 # =========================================================
 # PDF UTF-8 (FPDF2 + TTF)
-# IMPORTANT: add_font BEFORE add_page (because header() uses fonts)
+# IMPORTANT:
+# - add_font BEFORE add_page() (header() usa a fonte)
+# - widths somam EXACTAMENTE 190mm (A4 com margens 10+10)
+# - sanitização do texto para evitar quebras estranhas
 # =========================================================
 FONT_REGULAR = Path(__file__).parent / "DejaVuSans.ttf"
 FONT_BOLD = Path(__file__).parent / "DejaVuSans-Bold.ttf"
+
+# LARGURAS SEGURAS (somam 190mm)
+TABLE_WIDTHS = [12, 32, 48, 48, 25, 25]
+
+
+def sanitize_cell(text: str) -> str:
+    t = str(text or "")
+    t = t.replace("\r", " ").replace("\n", " ")
+    t = " ".join(t.split())  # remove espaços múltiplos
+    return t.strip()
 
 
 class PDF(FPDF):
@@ -262,9 +276,16 @@ class PDF(FPDF):
 
     def table_row(self, data, widths):
         self.set_font("DejaVu", "", 8)
+
+        row = [sanitize_cell(x) for x in data]
+
+        # mede linhas por coluna
         max_lines = 1
-        for i, txt in enumerate(data):
-            lines = self.multi_cell(widths[i], 4, str(txt), split_only=True)
+        for i, txt in enumerate(row):
+            # defesa: se por algum motivo vier vazio, coloca "-"
+            if txt == "":
+                txt = "-"
+            lines = self.multi_cell(widths[i], 4, txt, split_only=True)
             max_lines = max(max_lines, len(lines))
 
         height = max_lines * 4 + 4
@@ -275,11 +296,14 @@ class PDF(FPDF):
         x_start = self.get_x()
         y_start = self.get_y()
 
-        for i, txt in enumerate(data):
+        for i, txt in enumerate(row):
+            if txt == "":
+                txt = "-"
             self.set_xy(x_start, y_start)
-            self.multi_cell(widths[i], 4, str(txt), border=0, align="L")
+            self.multi_cell(widths[i], 4, txt, border=0, align="L")
             x_start += widths[i]
 
+        # bordas
         self.set_xy(10, y_start)
         x_curr = 10
         for w in widths:
@@ -297,27 +321,27 @@ def create_pdf(ctx: dict, plano: PlanoAula) -> bytes:
     pdf = PDF()
     pdf.set_auto_page_break(auto=False)
 
-    # REGISTAR FONTES ANTES DE add_page() (porque header() usa as fontes)
+    # REGISTAR FONTES ANTES DE add_page() (header() usa fontes)
     pdf.add_font("DejaVu", "", str(FONT_REGULAR), uni=True)
     pdf.add_font("DejaVu", "B", str(FONT_BOLD), uni=True)
 
     pdf.add_page()  # header() agora não falha
 
     pdf.set_font("DejaVu", "", 10)
-    pdf.cell(130, 7, f"Escola: {ctx['escola']}", 0, 0)
-    pdf.cell(0, 7, f"Data: {ctx['data']}", 0, 1)
+    pdf.cell(130, 7, f"Escola: {sanitize_cell(ctx['escola'])}", 0, 0)
+    pdf.cell(0, 7, f"Data: {sanitize_cell(ctx['data'])}", 0, 1)
 
-    pdf.cell(0, 7, f"Unidade Temática: {ctx['unidade']}", 0, 1)
+    pdf.cell(0, 7, f"Unidade Temática: {sanitize_cell(ctx['unidade'])}", 0, 1)
     pdf.set_font("DejaVu", "B", 10)
-    pdf.cell(0, 7, f"Tema: {ctx['tema']}", 0, 1)
+    pdf.cell(0, 7, f"Tema: {sanitize_cell(ctx['tema'])}", 0, 1)
 
     pdf.set_font("DejaVu", "", 10)
-    pdf.cell(100, 7, f"Professor: {ctx['professor']}", 0, 0)
-    pdf.cell(50, 7, f"Turma: {ctx['turma']}", 0, 0)
-    pdf.cell(0, 7, f"Duração: {ctx['duracao']}", 0, 1)
+    pdf.cell(100, 7, f"Professor: {sanitize_cell(ctx['professor'])}", 0, 0)
+    pdf.cell(50, 7, f"Turma: {sanitize_cell(ctx['turma'])}", 0, 0)
+    pdf.cell(0, 7, f"Duração: {sanitize_cell(ctx['duracao'])}", 0, 1)
 
-    pdf.cell(100, 7, f"Tipo de Aula: {ctx['tipo_aula']}", 0, 0)
-    pdf.cell(0, 7, f"Nº de alunos: {ctx['nr_alunos']}", 0, 1)
+    pdf.cell(100, 7, f"Tipo de Aula: {sanitize_cell(ctx['tipo_aula'])}", 0, 0)
+    pdf.cell(0, 7, f"Nº de alunos: {sanitize_cell(ctx['nr_alunos'])}", 0, 1)
 
     pdf.line(10, pdf.get_y() + 2, 200, pdf.get_y() + 2)
     pdf.ln(5)
@@ -327,19 +351,19 @@ def create_pdf(ctx: dict, plano: PlanoAula) -> bytes:
     pdf.set_font("DejaVu", "", 10)
     if isinstance(plano.objetivo_geral, list):
         for i, og in enumerate(plano.objetivo_geral, 1):
-            pdf.multi_cell(0, 6, f"{i}. {og}")
+            pdf.multi_cell(0, 6, f"{i}. {sanitize_cell(og)}")
     else:
-        pdf.multi_cell(0, 6, plano.objetivo_geral)
+        pdf.multi_cell(0, 6, sanitize_cell(plano.objetivo_geral))
     pdf.ln(2)
 
     pdf.set_font("DejaVu", "B", 10)
     pdf.cell(0, 6, "OBJECTIVOS ESPECÍFICOS:", 0, 1)
     pdf.set_font("DejaVu", "", 10)
     for i, oe in enumerate(plano.objetivos_especificos, 1):
-        pdf.multi_cell(0, 6, f"{i}. {oe}")
+        pdf.multi_cell(0, 6, f"{i}. {sanitize_cell(oe)}")
     pdf.ln(4)
 
-    widths = [12, 40, 50, 50, 20, 20]
+    widths = TABLE_WIDTHS
     pdf.draw_table_header(widths)
     for row in plano.tabela:
         pdf.table_row(row, widths)
@@ -368,7 +392,7 @@ with st.sidebar:
         "Turma heterogénea; alguns alunos com dificuldades de leitura/escrita.",
     )
     st.markdown("---")
-    st.caption("PDF UTF-8: DejaVuSans.ttf e DejaVuSans-Bold.ttf devem estar junto do app.py.")
+    st.caption("PDF: confirme DejaVuSans.ttf e DejaVuSans-Bold.ttf junto do app.py.")
 
 # Inputs principais
 col1, col2 = st.columns(2)
