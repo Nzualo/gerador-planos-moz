@@ -1,22 +1,21 @@
 # app.py
 # =========================================================
 # SDEJT - Planos SNE (Inhassoro) | Streamlit
-# JSON estrito + validação + contexto local + PDF UTF-8 (fpdf2)
-# FIX DEFINITIVO: PDF HORIZONTAL (Landscape) + larguras dinâmicas + quebra de tokens longos
+# BASE: fpdf (1.x) - estável no Streamlit Cloud
+# JSON estrito + validação + contexto local + PDF oficial
 # =========================================================
 
 import json
 import time
 import hashlib
 from datetime import date
-from pathlib import Path
 
 import streamlit as st
 import pandas as pd
 from pydantic import BaseModel, Field, ValidationError, conlist
 
 import google.generativeai as genai
-from fpdf import FPDF  # fpdf2
+from fpdf import FPDF  # fpdf 1.x
 
 
 # =========================================================
@@ -177,17 +176,17 @@ CONTEXTO LOCAL (obrigatório):
 REGRAS RIGOROSAS:
 1) Devolve APENAS JSON válido (sem texto antes/depois).
 2) Campos obrigatórios: "objetivo_geral", "objetivos_especificos", "tabela".
-3) Tabela com EXACTAMENTE 6 colunas:
+3) Tabela com EXACTAMENTE 6 colunas nesta ordem:
    ["tempo","funcao_didatica","actividade_professor","actividade_aluno","metodos","meios"]
 4) Funções didácticas obrigatórias e na ordem:
    - Introdução e Motivação
    - Mediação e Assimilação
    - Domínio e Consolidação
    - Controlo e Avaliação
-5) Actividades detalhadas e realistas (SNE + programas).
+5) Actividades detalhadas, participativas e realistas, alinhadas ao SNE e aos programas de ensino.
 6) Não inventar meios fora dos recursos listados.
-7) Contextualizar com exemplos do quotidiano de Inhassoro quando possível.
-8) Respeitar o tempo total ({ctx["duracao"]}) com distribuição realista.
+7) Contextualizar o tema com exemplos do quotidiano de Inhassoro sempre que possível.
+8) Respeitar o tempo total ({ctx["duracao"]}).
 
 DADOS:
 - Escola: {ctx["escola"]}
@@ -220,68 +219,60 @@ FORMATO JSON:
 
 
 # =========================================================
-# PDF UTF-8 (FPDF2 + TTF) - LANDSCAPE
+# PDF (fpdf 1.x) - robusto no Cloud
+# Nota: fpdf 1.x não suporta Unicode completo; por isso usamos limpeza e latin-1 replace.
 # =========================================================
-FONT_REGULAR = Path(__file__).parent / "DejaVuSans.ttf"
-FONT_BOLD = Path(__file__).parent / "DejaVuSans-Bold.ttf"
-
-
-def sanitize_cell(text: str) -> str:
-    t = str(text or "")
-    t = t.replace("\r", " ").replace("\n", " ")
-    t = " ".join(t.split())
-    # ajuda na quebra
-    t = t.replace("1.", "1. ").replace("2.", "2. ").replace("3.", "3. ").replace("4.", "4. ")
-    t = t.replace(":", ": ").replace(";", "; ")
-    return " ".join(t.split()).strip()
-
-
-def break_long_words(text: str, max_word_len: int = 28) -> str:
-    words = text.split(" ")
-    out = []
-    for w in words:
-        if len(w) <= max_word_len:
-            out.append(w)
-        else:
-            chunks = [w[i : i + max_word_len] for i in range(0, len(w), max_word_len)]
-            out.append(" ".join(chunks))
-    return " ".join(out)
+def clean_text(text) -> str:
+    if text is None:
+        return "-"
+    t = str(text).strip()
+    replacements = {
+        "–": "-",
+        "—": "-",
+        "“": '"',
+        "”": '"',
+        "‘": "'",
+        "’": "'",
+        "…": "...",
+        "•": "-",
+    }
+    for k, v in replacements.items():
+        t = t.replace(k, v)
+    # normaliza espaços
+    t = " ".join(t.replace("\r", " ").replace("\n", " ").split())
+    return t
 
 
 class PDF(FPDF):
     def header(self):
-        self.set_font("DejaVu", "B", 12)
+        self.set_font("Arial", "B", 12)
         self.cell(0, 5, "REPÚBLICA DE MOÇAMBIQUE", 0, 1, "C")
-        self.set_font("DejaVu", "B", 10)
+        self.set_font("Arial", "B", 10)
         self.cell(0, 5, "GOVERNO DO DISTRITO DE INHASSORO", 0, 1, "C")
         self.cell(0, 5, "SERVIÇO DISTRITAL DE EDUCAÇÃO, JUVENTUDE E TECNOLOGIA", 0, 1, "C")
-        self.ln(4)
-        self.set_font("DejaVu", "B", 14)
-        self.cell(0, 9, "PLANO DE AULA", 0, 1, "C")
-        self.ln(1)
+        self.ln(5)
+        self.set_font("Arial", "B", 14)
+        self.cell(0, 10, "PLANO DE AULA", 0, 1, "C")
+        self.ln(2)
 
     def footer(self):
-        self.set_y(-12)
-        self.set_font("DejaVu", "", 7)
-        self.cell(0, 8, "SDEJT Inhassoro - Processado por IA (validação final: Professor)", 0, 0, "C")
+        self.set_y(-15)
+        self.set_font("Arial", "I", 7)
+        self.cell(0, 10, "SDEJT Inhassoro - Processado por IA (validação final: Professor)", 0, 0, "C")
 
     def draw_table_header(self, widths):
         headers = ["TEMPO", "F. DIDÁTICA", "ACTIV. PROFESSOR", "ACTIV. ALUNO", "MÉTODOS", "MEIOS"]
-        self.set_x(self.l_margin)
-        self.set_font("DejaVu", "B", 8)
+        self.set_font("Arial", "B", 7)
         self.set_fill_color(220, 220, 220)
         for i, h in enumerate(headers):
-            self.cell(widths[i], 7, h, 1, 0, "C", True)
+            self.cell(widths[i], 6, h, 1, 0, "C", True)
         self.ln()
 
     def table_row(self, data, widths):
-        self.set_font("DejaVu", "", 8)
+        row = [clean_text(x) for x in data]
+        self.set_font("Arial", "", 8)
 
-        row = []
-        for x in data:
-            txt = break_long_words(sanitize_cell(x), 28)
-            row.append(txt if txt else "-")
-
+        # calcula linhas por coluna
         max_lines = 1
         for i, txt in enumerate(row):
             lines = self.multi_cell(widths[i], 4, txt, split_only=True)
@@ -289,108 +280,75 @@ class PDF(FPDF):
 
         height = max_lines * 4 + 4
 
-        # Landscape: altura útil maior, mas ainda controlamos quebra
-        if self.get_y() + height > (self.h - self.b_margin - 10):
+        # quebra de página
+        if self.get_y() + height > 270:
             self.add_page()
             self.draw_table_header(widths)
 
-        y_start = self.get_y()
-        x = self.l_margin
+        x0 = 10
+        y0 = self.get_y()
 
+        # escreve conteúdo
+        x = x0
         for i, txt in enumerate(row):
-            self.set_xy(x, y_start)
+            self.set_xy(x, y0)
             self.multi_cell(widths[i], 4, txt, border=0, align="L")
             x += widths[i]
 
-        # bordas
-        x = self.l_margin
+        # desenha bordas
+        x = x0
         for w in widths:
-            self.rect(x, y_start, w, height)
+            self.rect(x, y0, w, height)
             x += w
 
-        self.set_y(y_start + height)
-
-
-def compute_widths_landscape(pdf: FPDF) -> list[float]:
-    """
-    Larguras dinâmicas com base no epw do Landscape.
-    Distribuição dá mais espaço às colunas longas.
-    """
-    epw = pdf.w - pdf.l_margin - pdf.r_margin
-
-    # pesos por coluna: tempo, função, prof, aluno, métodos, meios
-    weights = [8, 18, 36, 36, 16, 16]  # soma 130
-    total = sum(weights)
-    widths = [epw * (w / total) for w in weights]
-
-    # garante que a coluna "Tempo" não fica minúscula
-    widths[0] = max(widths[0], 14)
-
-    # reajusta para continuar a somar epw
-    diff = epw - sum(widths)
-    widths[-1] += diff
-    return widths
+        self.set_y(y0 + height)
 
 
 def create_pdf(ctx: dict, plano: PlanoAula) -> bytes:
-    if not FONT_REGULAR.exists() or not FONT_BOLD.exists():
-        raise FileNotFoundError(
-            "Faltam as fontes TTF. Coloque DejaVuSans.ttf e DejaVuSans-Bold.ttf no mesmo directório do app.py"
-        )
-
-    # LANDSCAPE
-    pdf = PDF(orientation="L", format="A4")
-    pdf.set_margins(10, 10, 10)
+    pdf = PDF()
     pdf.set_auto_page_break(auto=False)
-
-    # fontes antes de add_page()
-    pdf.add_font("DejaVu", "", str(FONT_REGULAR), uni=True)
-    pdf.add_font("DejaVu", "B", str(FONT_BOLD), uni=True)
-
     pdf.add_page()
 
-    pdf.set_font("DejaVu", "", 10)
-    pdf.cell(170, 7, f"Escola: {sanitize_cell(ctx['escola'])}", 0, 0)
-    pdf.cell(0, 7, f"Data: {sanitize_cell(ctx['data'])}", 0, 1)
+    pdf.set_font("Arial", "", 10)
+    pdf.cell(130, 7, f"Escola: {clean_text(ctx['escola'])}", 0, 0)
+    pdf.cell(0, 7, f"Data: {clean_text(ctx['data'])}", 0, 1)
 
-    pdf.cell(0, 7, f"Unidade Temática: {sanitize_cell(ctx['unidade'])}", 0, 1)
-    pdf.set_font("DejaVu", "B", 10)
-    pdf.cell(0, 7, f"Tema: {sanitize_cell(ctx['tema'])}", 0, 1)
+    pdf.cell(0, 7, f"Unidade Temática: {clean_text(ctx['unidade'])}", 0, 1)
+    pdf.set_font("Arial", "B", 10)
+    pdf.cell(0, 7, f"Tema: {clean_text(ctx['tema'])}", 0, 1)
 
-    pdf.set_font("DejaVu", "", 10)
-    pdf.cell(120, 7, f"Professor: {sanitize_cell(ctx['professor'])}", 0, 0)
-    pdf.cell(60, 7, f"Turma: {sanitize_cell(ctx['turma'])}", 0, 0)
-    pdf.cell(0, 7, f"Duração: {sanitize_cell(ctx['duracao'])}", 0, 1)
+    pdf.set_font("Arial", "", 10)
+    pdf.cell(100, 7, f"Professor: {clean_text(ctx['professor'])}", 0, 0)
+    pdf.cell(50, 7, f"Turma: {clean_text(ctx['turma'])}", 0, 0)
+    pdf.cell(0, 7, f"Duração: {clean_text(ctx['duracao'])}", 0, 1)
 
-    pdf.cell(120, 7, f"Tipo de Aula: {sanitize_cell(ctx['tipo_aula'])}", 0, 0)
-    pdf.cell(0, 7, f"Nº de alunos: {sanitize_cell(ctx['nr_alunos'])}", 0, 1)
+    pdf.cell(100, 7, f"Tipo de Aula: {clean_text(ctx['tipo_aula'])}", 0, 0)
+    pdf.cell(0, 7, f"Nº de alunos: {clean_text(ctx['nr_alunos'])}", 0, 1)
 
-    pdf.line(pdf.l_margin, pdf.get_y() + 2, pdf.w - pdf.r_margin, pdf.get_y() + 2)
+    pdf.line(10, pdf.get_y() + 2, 200, pdf.get_y() + 2)
     pdf.ln(5)
 
-    pdf.set_font("DejaVu", "B", 10)
+    # Objectivos
+    pdf.set_font("Arial", "B", 10)
     pdf.cell(0, 6, "OBJECTIVO(S) GERAL(IS):", 0, 1)
-    pdf.set_font("DejaVu", "", 10)
-
+    pdf.set_font("Arial", "", 10)
     if isinstance(plano.objetivo_geral, list):
         for i, og in enumerate(plano.objetivo_geral, 1):
-            pdf.multi_cell(0, 6, f"{i}. {sanitize_cell(og)}")
+            pdf.multi_cell(0, 6, f"{i}. {clean_text(og)}")
     else:
-        pdf.multi_cell(0, 6, sanitize_cell(plano.objetivo_geral))
-
+        pdf.multi_cell(0, 6, clean_text(plano.objetivo_geral))
     pdf.ln(2)
 
-    pdf.set_font("DejaVu", "B", 10)
+    pdf.set_font("Arial", "B", 10)
     pdf.cell(0, 6, "OBJECTIVOS ESPECÍFICOS:", 0, 1)
-    pdf.set_font("DejaVu", "", 10)
+    pdf.set_font("Arial", "", 10)
     for i, oe in enumerate(plano.objetivos_especificos, 1):
-        pdf.multi_cell(0, 6, f"{i}. {sanitize_cell(oe)}")
-
+        pdf.multi_cell(0, 6, f"{i}. {clean_text(oe)}")
     pdf.ln(4)
 
-    widths = compute_widths_landscape(pdf)
+    # Tabela (somam ~190mm)
+    widths = [12, 32, 52, 52, 21, 21]
     pdf.draw_table_header(widths)
-
     for row in plano.tabela:
         pdf.table_row(row, widths)
 
@@ -412,18 +370,25 @@ with st.sidebar:
     tipo_escola = st.selectbox("Tipo de escola", ["EPC", "ESG1", "ESG2", "Outra"])
     recursos = st.text_area("Recursos disponíveis", "Quadro, giz/marcador, livros, cadernos.")
     nr_alunos = st.text_input("Nº de alunos", "40 (aprox.)")
-    obs_turma = st.text_area("Observações da turma", "Turma heterogénea; alguns alunos com dificuldades de leitura/escrita.")
-    st.markdown("---")
-    st.caption("PDF horizontal (Landscape). Confirme as fontes DejaVu junto do app.py.")
+    obs_turma = st.text_area(
+        "Observações da turma",
+        "Turma heterogénea; alguns alunos com dificuldades de leitura/escrita.",
+    )
 
 col1, col2 = st.columns(2)
 with col1:
     escola = st.text_input("Escola", "EPC de Inhassoro")
     professor = st.text_input("Professor", st.session_state.get("user_name", ""))
     disciplina = st.text_input("Disciplina", "Língua Portuguesa")
-    classe = st.selectbox("Classe", ["1ª", "2ª", "3ª", "4ª", "5ª", "6ª", "7ª", "8ª", "9ª", "10ª", "11ª", "12ª"])
+    classe = st.selectbox(
+        "Classe",
+        ["1ª", "2ª", "3ª", "4ª", "5ª", "6ª", "7ª", "8ª", "9ª", "10ª", "11ª", "12ª"],
+    )
     unidade = st.text_input("Unidade Temática", placeholder="Ex: Textos normativos")
-    tipo_aula = st.selectbox("Tipo de Aula", ["Introdução de Matéria Nova", "Consolidação e Exercitação", "Verificação e Avaliação", "Revisão"])
+    tipo_aula = st.selectbox(
+        "Tipo de Aula",
+        ["Introdução de Matéria Nova", "Consolidação e Exercitação", "Verificação e Avaliação", "Revisão"],
+    )
 
 with col2:
     duracao = st.selectbox("Duração", ["45 Min", "90 Min"])
@@ -517,9 +482,9 @@ if st.session_state.get("plano_pronto"):
         try:
             pdf_bytes = create_pdf(ctx, plano)
             st.download_button(
-                "📄 Baixar PDF Oficial (Horizontal)",
+                "📄 Baixar PDF Oficial",
                 data=pdf_bytes,
-                file_name=f"Plano_{ctx['disciplina']}_{ctx['classe']}_{ctx['tema']}_H.pdf".replace(" ", "_"),
+                file_name=f"Plano_{ctx['disciplina']}_{ctx['classe']}_{ctx['tema']}.pdf".replace(" ", "_"),
                 mime="application/pdf",
                 type="primary",
             )
