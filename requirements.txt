@@ -1,5 +1,5 @@
 streamlit
 google-generativeai
 pandas
-fpdf2
+fpdf
 pydantic
