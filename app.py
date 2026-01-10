@@ -2,7 +2,12 @@
 # =========================================================
 # SDEJT - Planos SNE (Inhassoro) | Streamlit
 # BASE: fpdf (1.x) - estável no Streamlit Cloud
-# JSON estrito + validação + contexto local + PDF oficial
+# Melhorias:
+# 1) Regras obrigatórias:
+#    - 1ª Função (Introdução e Motivação): controlo de presenças + correcção do TPC (se houver)
+#    - Última Função (Controlo e Avaliação): marcar/atribuir TPC
+#    - Enforcer no backend (garante mesmo se a IA falhar)
+# 2) Pré-visualização do plano em imagens (PNG) antes do PDF
 # =========================================================
 
 import json
@@ -16,6 +21,8 @@ from pydantic import BaseModel, Field, ValidationError, conlist
 
 import google.generativeai as genai
 from fpdf import FPDF  # fpdf 1.x
+
+from PIL import Image, ImageDraw, ImageFont
 
 
 # =========================================================
@@ -188,6 +195,14 @@ REGRAS RIGOROSAS:
 7) Contextualizar o tema com exemplos do quotidiano de Inhassoro sempre que possível.
 8) Respeitar o tempo total ({ctx["duracao"]}).
 
+REGRAS ESPECIAIS (OBRIGATÓRIO):
+A) Na FUNÇÃO 1 (Introdução e Motivação), o professor DEVE:
+   - fazer o controlo de presenças (chamada) e registar ausências;
+   - orientar a correcção do TPC (caso haja), com participação dos alunos.
+B) Na FUNÇÃO 4 (Controlo e Avaliação), o professor DEVE:
+   - verificar a aprendizagem com perguntas/exercícios curtos e correcção orientada;
+   - marcar/atribuir o TPC, explicando a tarefa e critérios (o que fazer em casa).
+
 DADOS:
 - Escola: {ctx["escola"]}
 - Professor: {ctx["professor"]}
@@ -219,8 +234,217 @@ FORMATO JSON:
 
 
 # =========================================================
-# PDF (fpdf 1.x) - robusto no Cloud
-# Nota: fpdf 1.x não suporta Unicode completo; por isso usamos limpeza e latin-1 replace.
+# ENFORCER: garante as regras pedagógicas mesmo se a IA falhar
+# =========================================================
+def contains_any(text: str, terms: list[str]) -> bool:
+    t = (text or "").lower()
+    return any(term.lower() in t for term in terms)
+
+
+def enforce_didactic_rules(plano: PlanoAula) -> PlanoAula:
+    if not plano.tabela:
+        return plano
+
+    intro_idx = None
+    for i, row in enumerate(plano.tabela):
+        if (row[1] or "").strip().lower() == "introdução e motivação":
+            intro_idx = i
+            break
+
+    controlo_idx = None
+    for i in range(len(plano.tabela) - 1, -1, -1):
+        row = plano.tabela[i]
+        if (row[1] or "").strip().lower() == "controlo e avaliação":
+            controlo_idx = i
+            break
+
+    # Função 1: chamada + correcção do TPC
+    if intro_idx is not None:
+        row = plano.tabela[intro_idx]
+        prof = row[2] or ""
+        aluno = row[3] or ""
+
+        if not contains_any(prof, ["chamada", "presen", "controlo de presen"]):
+            prof = (prof + " " if prof else "") + "Faz o controlo de presenças (chamada), regista ausências e organiza a turma."
+        if not contains_any(aluno, ["respond", "presen", "confirm"]):
+            aluno = (aluno + " " if aluno else "") + "Respondem à chamada e confirmam presenças; organizam-se para a aula."
+
+        if not contains_any(prof, ["tpc", "trabalho para casa", "correc"]):
+            prof = (prof + " " if prof else "") + "Orienta a correcção do TPC (se houver): pede respostas, corrige no quadro e esclarece dúvidas."
+        if not contains_any(aluno, ["tpc", "trabalho para casa", "corrig"]):
+            aluno = (aluno + " " if aluno else "") + "Apresentam o TPC, comparam respostas e corrigem no caderno com orientação do professor."
+
+        plano.tabela[intro_idx] = [row[0], row[1], prof, aluno, row[4], row[5]]
+
+    # Função 4: marcar TPC
+    if controlo_idx is not None:
+        row = plano.tabela[controlo_idx]
+        prof = row[2] or ""
+        aluno = row[3] or ""
+
+        if not contains_any(prof, ["marc", "atrib", "tpc", "trabalho para casa"]):
+            prof = (prof + " " if prof else "") + "Marca o TPC: explica a tarefa, como fazer, critérios e prazo de entrega."
+        if not contains_any(aluno, ["anot", "tpc", "regist"]):
+            aluno = (aluno + " " if aluno else "") + "Anotam o TPC no caderno, colocam dúvidas e confirmam o que deve ser feito."
+
+        plano.tabela[controlo_idx] = [row[0], row[1], prof, aluno, row[4], row[5]]
+
+    return plano
+
+
+# =========================================================
+# PREVIEW IMAGES (PNG) - antes do PDF
+# =========================================================
+def wrap_text(draw, text, font, max_width):
+    words = (text or "").split()
+    lines, line = [], ""
+    for w in words:
+        test = (line + " " + w).strip()
+        if draw.textlength(test, font=font) <= max_width:
+            line = test
+        else:
+            if line:
+                lines.append(line)
+            line = w
+    if line:
+        lines.append(line)
+    return lines
+
+
+def plano_to_preview_images(ctx: dict, plano: PlanoAula) -> list[Image.Image]:
+    W, H = 1240, 1754  # A4 approx @150dpi
+    margin = 60
+    img_list = []
+
+    try:
+        font_title = ImageFont.truetype("DejaVuSans.ttf", 36)
+        font_h = ImageFont.truetype("DejaVuSans.ttf", 22)
+        font_b = ImageFont.truetype("DejaVuSans.ttf", 18)
+        font_s = ImageFont.truetype("DejaVuSans.ttf", 16)
+    except Exception:
+        font_title = ImageFont.load_default()
+        font_h = ImageFont.load_default()
+        font_b = ImageFont.load_default()
+        font_s = ImageFont.load_default()
+
+    def new_page():
+        img = Image.new("RGB", (W, H), "white")
+        draw = ImageDraw.Draw(img)
+        return img, draw
+
+    def header(draw, y):
+        draw.text((margin, y), "REPÚBLICA DE MOÇAMBIQUE", font=font_h, fill="black")
+        y += 30
+        draw.text((margin, y), "GOVERNO DO DISTRITO DE INHASSORO", font=font_h, fill="black")
+        y += 30
+        draw.text((margin, y), "SERVIÇO DISTRITAL DE EDUCAÇÃO, JUVENTUDE E TECNOLOGIA", font=font_h, fill="black")
+        y += 50
+        draw.text((margin, y), "PLANO DE AULA", font=font_title, fill="black")
+        return y + 60
+
+    # Página 1: metadados + objectivos
+    img, draw = new_page()
+    y = margin
+    y = header(draw, y)
+
+    meta_lines = [
+        f"Escola: {ctx.get('escola','')}",
+        f"Data: {ctx.get('data','')}",
+        f"Disciplina: {ctx.get('disciplina','')}   Classe: {ctx.get('classe','')}   Turma: {ctx.get('turma','')}",
+        f"Unidade Temática: {ctx.get('unidade','')}",
+        f"Tema: {ctx.get('tema','')}",
+        f"Professor: {ctx.get('professor','')}   Duração: {ctx.get('duracao','')}   Tipo: {ctx.get('tipo_aula','')}",
+        f"Nº de alunos: {ctx.get('nr_alunos','')}",
+    ]
+    for line in meta_lines:
+        for l in wrap_text(draw, line, font_b, W - 2 * margin):
+            draw.text((margin, y), l, font=font_b, fill="black")
+            y += 24
+        y += 6
+
+    y += 10
+    draw.text((margin, y), "OBJECTIVO(S) GERAL(IS):", font=font_h, fill="black")
+    y += 30
+
+    if isinstance(plano.objetivo_geral, list):
+        ogs = [f"{i}. {x}" for i, x in enumerate(plano.objetivo_geral, 1)]
+    else:
+        ogs = [plano.objetivo_geral]
+
+    for og in ogs:
+        for l in wrap_text(draw, og, font_b, W - 2 * margin):
+            draw.text((margin, y), l, font=font_b, fill="black")
+            y += 22
+        y += 6
+
+    y += 10
+    draw.text((margin, y), "OBJECTIVOS ESPECÍFICOS:", font=font_h, fill="black")
+    y += 30
+
+    for i, oe in enumerate(plano.objetivos_especificos, 1):
+        text = f"{i}. {oe}"
+        for l in wrap_text(draw, text, font_b, W - 2 * margin):
+            draw.text((margin, y), l, font=font_b, fill="black")
+            y += 22
+        y += 4
+
+    img_list.append(img)
+
+    # Página(s) da tabela
+    headers = ["Tempo", "Função Didáctica", "Activ. Professor", "Activ. Aluno", "Métodos", "Meios"]
+    col_w = [90, 210, 300, 300, 160, 160]  # total 1220
+    start_x = margin
+    row_h = 20
+
+    def draw_table_header(draw, y):
+        x = start_x
+        for i, htxt in enumerate(headers):
+            draw.rectangle([x, y, x + col_w[i], y + 30], outline="black")
+            draw.text((x + 6, y + 6), htxt, font=font_s, fill="black")
+            x += col_w[i]
+        return y + 30
+
+    img, draw = new_page()
+    y = margin
+    y = header(draw, y)
+    y = draw_table_header(draw, y)
+
+    for row in plano.tabela:
+        cells = [str(c or "-") for c in row]
+
+        wrapped = []
+        max_lines = 1
+        for i, c in enumerate(cells):
+            lines = wrap_text(draw, c, font_s, col_w[i] - 12)
+            wrapped.append(lines)
+            max_lines = max(max_lines, len(lines))
+
+        needed_h = max(30, 8 + max_lines * row_h)
+
+        if y + needed_h > H - margin:
+            img_list.append(img)
+            img, draw = new_page()
+            y = margin
+            y = header(draw, y)
+            y = draw_table_header(draw, y)
+
+        x = start_x
+        for i, lines in enumerate(wrapped):
+            draw.rectangle([x, y, x + col_w[i], y + needed_h], outline="black")
+            yy = y + 6
+            for ln in lines[:20]:
+                draw.text((x + 6, yy), ln, font=font_s, fill="black")
+                yy += row_h
+            x += col_w[i]
+
+        y += needed_h
+
+    img_list.append(img)
+    return img_list
+
+
+# =========================================================
+# PDF (fpdf 1.x)
 # =========================================================
 def clean_text(text) -> str:
     if text is None:
@@ -238,7 +462,6 @@ def clean_text(text) -> str:
     }
     for k, v in replacements.items():
         t = t.replace(k, v)
-    # normaliza espaços
     t = " ".join(t.replace("\r", " ").replace("\n", " ").split())
     return t
 
@@ -272,7 +495,6 @@ class PDF(FPDF):
         row = [clean_text(x) for x in data]
         self.set_font("Arial", "", 8)
 
-        # calcula linhas por coluna
         max_lines = 1
         for i, txt in enumerate(row):
             lines = self.multi_cell(widths[i], 4, txt, split_only=True)
@@ -280,7 +502,6 @@ class PDF(FPDF):
 
         height = max_lines * 4 + 4
 
-        # quebra de página
         if self.get_y() + height > 270:
             self.add_page()
             self.draw_table_header(widths)
@@ -288,14 +509,12 @@ class PDF(FPDF):
         x0 = 10
         y0 = self.get_y()
 
-        # escreve conteúdo
         x = x0
         for i, txt in enumerate(row):
             self.set_xy(x, y0)
             self.multi_cell(widths[i], 4, txt, border=0, align="L")
             x += widths[i]
 
-        # desenha bordas
         x = x0
         for w in widths:
             self.rect(x, y0, w, height)
@@ -328,7 +547,6 @@ def create_pdf(ctx: dict, plano: PlanoAula) -> bytes:
     pdf.line(10, pdf.get_y() + 2, 200, pdf.get_y() + 2)
     pdf.ln(5)
 
-    # Objectivos
     pdf.set_font("Arial", "B", 10)
     pdf.cell(0, 6, "OBJECTIVO(S) GERAL(IS):", 0, 1)
     pdf.set_font("Arial", "", 10)
@@ -346,8 +564,7 @@ def create_pdf(ctx: dict, plano: PlanoAula) -> bytes:
         pdf.multi_cell(0, 6, f"{i}. {clean_text(oe)}")
     pdf.ln(4)
 
-    # Tabela (somam ~190mm)
-    widths = [12, 32, 52, 52, 21, 21]
+    widths = [12, 32, 52, 52, 21, 21]  # cabe no A4
     pdf.draw_table_header(widths)
     for row in plano.tabela:
         pdf.table_row(row, widths)
@@ -441,10 +658,16 @@ if st.button("🚀 Gerar Plano de Aula", type="primary", disabled=bool(missing))
             raw = safe_extract_json(texto)
             plano = PlanoAula(**raw)
 
+            # aplica regras obrigatórias (presenças+TPC no início, TPC no fim)
+            plano = enforce_didactic_rules(plano)
+
             st.session_state["plano"] = plano.model_dump()
             st.session_state["ctx"] = ctx
             st.session_state["modelo_usado"] = modelo_usado
             st.session_state["plano_pronto"] = True
+
+            # limpa previews antigos
+            st.session_state.pop("preview_imgs", None)
 
         except ValidationError as ve:
             st.error("A resposta da IA não respeitou o formato esperado (JSON/estrutura).")
@@ -457,25 +680,26 @@ if st.session_state.get("plano_pronto"):
     st.divider()
     st.subheader("✅ Plano Gerado com Sucesso")
     st.caption(f"Modelo IA usado: {st.session_state.get('modelo_usado', '-')}")
+
     plano = PlanoAula(**st.session_state["plano"])
     ctx = st.session_state["ctx"]
 
-    st.markdown("#### Objectivo(s) Geral(is)")
-    if isinstance(plano.objetivo_geral, list):
-        for i, x in enumerate(plano.objetivo_geral, 1):
-            st.write(f"{i}. {x}")
-    else:
-        st.write(plano.objetivo_geral)
+    # =========================
+    # PREVIEW EM IMAGENS
+    # =========================
+    st.subheader("👁️ Pré-visualização do Plano (Imagens)")
 
-    st.markdown("#### Objectivos Específicos")
-    for i, x in enumerate(plano.objetivos_especificos, 1):
-        st.write(f"{i}. {x}")
+    if "preview_imgs" not in st.session_state:
+        st.session_state["preview_imgs"] = plano_to_preview_images(ctx, plano)
 
-    df = pd.DataFrame(
-        plano.tabela,
-        columns=["Tempo", "Função Didáctica", "Actividade do Professor", "Actividade do Aluno", "Métodos", "Meios"],
-    )
-    st.dataframe(df, hide_index=True, use_container_width=True)
+    for i, im in enumerate(st.session_state["preview_imgs"], 1):
+        st.image(im, caption=f"Pré-visualização - Página {i}", use_container_width=True)
+
+    # =========================
+    # EXPORTAÇÃO PDF
+    # =========================
+    st.divider()
+    st.subheader("📄 Exportação")
 
     c1, c2 = st.columns(2)
     with c1:
@@ -496,5 +720,6 @@ if st.session_state.get("plano_pronto"):
             st.session_state["plano_pronto"] = False
             st.session_state.pop("plano", None)
             st.session_state.pop("ctx", None)
+            st.session_state.pop("preview_imgs", None)
             st.session_state.pop("modelo_usado", None)
             st.rerun()
