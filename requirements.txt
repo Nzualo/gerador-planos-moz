@@ -5,3 +5,4 @@ pydantic
 fpdf
 Pillow
 supabase
+supabase==2.6.0
