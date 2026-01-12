@@ -2,18 +2,23 @@
 # =========================================================
 # SDEJT - Planos SNE (Inhassoro) | Streamlit + Supabase
 #
-# Melhorias pedidas:
-# - Admin vê professores com acesso (nomes/escola/estado)
-# - Admin vê quantos planos já geraram (hoje e total)
-# - Admin pode alterar limite diário (ex.: 2 -> 6) por professor
-# - Admin pode revogar acesso (approved -> trial)
-#
-# Notificação WhatsApp: feita no Supabase (DB Webhook -> Edge Function).
+# Actualizações incluídas nesta versão:
+# 1) Tipos de escola actualizados: EP, EB, ES1, ES2, Outra
+# 2) Painel Admin melhorado:
+#    - KPI no topo: total de professores, aprovados, pendentes, bloqueados
+#    - KPI: total de planos gerados hoje (global)
+#    - Tabela de professores com filtro por estado e por escola
+#    - Gestão por professor: limite diário, aprovar, revogar, bloquear, desbloquear, reset contador hoje
+# 3) Login: professores entram com Nome + Escola, trial/pending/approved/admin/blocked
+# 4) Limite diário por professor (daily_limit) (modo trial/pending); acesso total ilimitado
+# 5) Plano: Português de Moçambique, regras de presenças+TPC na 1ª função, marcar TPC na última
+# 6) 1ª–6ª: "Livro do aluno" em Meios se disponível
+# 7) Pré-visualização em imagens antes do PDF (fpdf 1.x)
 # =========================================================
 
 import json
 import hashlib
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import streamlit as st
 import pandas as pd
@@ -44,7 +49,7 @@ st.markdown(
 
 
 # =========================================================
-# Supabase
+# Supabase helpers
 # =========================================================
 def supa():
     if "SUPABASE_URL" not in st.secrets or "SUPABASE_SERVICE_ROLE_KEY" not in st.secrets:
@@ -70,6 +75,10 @@ def is_unlimited(status: str) -> bool:
     return status in ("approved", "admin")
 
 
+def is_blocked(status: str) -> bool:
+    return status == "blocked"
+
+
 def get_user(user_key: str):
     sb = supa()
     r = sb.table("app_users").select("*").eq("user_key", user_key).limit(1).execute()
@@ -80,7 +89,6 @@ def upsert_user(user_key: str, name: str, school: str, status: str):
     sb = supa()
     existing = get_user(user_key)
     payload = {"user_key": user_key, "name": name.strip(), "school": school.strip(), "status": status}
-    # daily_limit fica como default do BD (2), a não ser que já exista
     if existing:
         sb.table("app_users").update(payload).eq("user_key", user_key).execute()
     else:
@@ -90,13 +98,15 @@ def upsert_user(user_key: str, name: str, school: str, status: str):
 def set_user_status(user_key: str, status: str, approved_by: str | None = None):
     sb = supa()
     payload = {"status": status}
+
     if status == "approved":
         payload["approved_at"] = datetime.now().isoformat()
         payload["approved_by"] = approved_by
-    if status == "trial":
-        # ao revogar, limpa a aprovação
+
+    if status in ("trial", "blocked"):
         payload["approved_at"] = None
         payload["approved_by"] = None
+
     sb.table("app_users").update(payload).eq("user_key", user_key).execute()
 
 
@@ -109,7 +119,6 @@ def get_daily_limit(user_key: str) -> int:
     u = get_user(user_key)
     if not u:
         return 2
-    # se a coluna não existir por algum motivo, cai para 2
     try:
         v = u.get("daily_limit", 2)
         return int(v) if v is not None else 2
@@ -119,11 +128,17 @@ def get_daily_limit(user_key: str) -> int:
 
 def create_access_request(user_key: str, name: str, school: str):
     sb = supa()
-    # garante user pending
+    user = get_user(user_key)
+    if user and is_blocked(user.get("status", "")):
+        return "blocked"
+    if user and user.get("status") in ("admin", "approved"):
+        return "already_approved"
+
     upsert_user(user_key, name, school, "pending")
     sb.table("access_requests").insert(
         {"user_key": user_key, "name": name.strip(), "school": school.strip(), "status": "pending"}
     ).execute()
+    return "ok"
 
 
 def get_today_count(user_key: str) -> int:
@@ -145,9 +160,23 @@ def inc_today_count(user_key: str):
         sb.table("usage_daily").insert({"user_key": user_key, "day": day, "count": 1}).execute()
 
 
+def reset_today_count(user_key: str):
+    sb = supa()
+    day = today_iso()
+    r = sb.table("usage_daily").select("count").eq("user_key", user_key).eq("day", day).limit(1).execute()
+    if r.data:
+        sb.table("usage_daily").update({"count": 0}).eq("user_key", user_key).eq("day", day).execute()
+    else:
+        sb.table("usage_daily").insert({"user_key": user_key, "day": day, "count": 0}).execute()
+
+
 def can_generate(user_key: str, status: str) -> tuple[bool, str]:
+    if is_blocked(status):
+        return False, "O seu acesso está bloqueado. Contacte o Administrador."
+
     if is_unlimited(status):
         return True, ""
+
     limit = get_daily_limit(user_key)
     used = get_today_count(user_key)
     if used >= limit:
@@ -155,7 +184,7 @@ def can_generate(user_key: str, status: str) -> tuple[bool, str]:
     return True, ""
 
 
-# -------- Admin dashboards (dados) --------
+# -------- Admin data --------
 def list_pending_requests_df():
     sb = supa()
     r = (
@@ -184,28 +213,41 @@ def list_users_df():
     return df
 
 
-def usage_stats_df() -> pd.DataFrame:
-    """
-    Devolve df com:
-    - user_key
-    - total_count (soma)
-    - today_count (dia actual)
-    """
+def usage_daily_all_df() -> pd.DataFrame:
     sb = supa()
-    # total por user
-    r_total = sb.table("usage_daily").select("user_key,count,day").execute()
-    d = pd.DataFrame(r_total.data or [])
+    r = sb.table("usage_daily").select("user_key,day,count").execute()
+    d = pd.DataFrame(r.data or [])
     if d.empty:
-        return pd.DataFrame(columns=["user_key", "total_count", "today_count"])
-
+        return pd.DataFrame(columns=["user_key", "day", "count"])
     d["count"] = pd.to_numeric(d["count"], errors="coerce").fillna(0).astype(int)
+    d["day"] = pd.to_datetime(d["day"], errors="coerce").dt.date
+    return d
+
+
+def usage_stats_users_df(users_df: pd.DataFrame) -> pd.DataFrame:
+    d = usage_daily_all_df()
+    if users_df.empty:
+        return users_df
+
+    if d.empty:
+        users_df["today_count"] = 0
+        users_df["total_count"] = 0
+        return users_df
+
+    today = date.today()
     total = d.groupby("user_key", as_index=False)["count"].sum().rename(columns={"count": "total_count"})
-
-    today = d[d["day"] == today_iso()].groupby("user_key", as_index=False)["count"].sum().rename(columns={"count": "today_count"})
-
-    out = total.merge(today, on="user_key", how="left")
+    today_df = d[d["day"] == today].groupby("user_key", as_index=False)["count"].sum().rename(columns={"count": "today_count"})
+    out = users_df.merge(total, on="user_key", how="left").merge(today_df, on="user_key", how="left")
     out["today_count"] = out["today_count"].fillna(0).astype(int)
+    out["total_count"] = out["total_count"].fillna(0).astype(int)
     return out
+
+
+def global_today_total() -> int:
+    d = usage_daily_all_df()
+    if d.empty:
+        return 0
+    return int(d[d["day"] == date.today()]["count"].sum())
 
 
 # =========================================================
@@ -248,6 +290,7 @@ def access_gate() -> dict:
 
         user_key = make_user_key(name, school)
         user = get_user(user_key)
+
         if user is None:
             upsert_user(user_key, name, school, "trial")
             user = get_user(user_key)
@@ -260,7 +303,10 @@ def access_gate() -> dict:
                 upsert_user(user_key, name, school, "admin")
                 status = "admin"
 
-        # limite e uso
+        if is_blocked(status):
+            st.error("O seu acesso está bloqueado. Contacte o Administrador.")
+            st.stop()
+
         limit = get_daily_limit(user_key)
         used = get_today_count(user_key)
 
@@ -276,8 +322,13 @@ def access_gate() -> dict:
             st.markdown("### Acesso Total")
             st.write("Para ter acesso total e ilimitado, envie o pedido ao Administrador.")
             if st.button("📝 Solicitar Acesso Total", type="primary"):
-                create_access_request(user_key, name, school)
-                st.success("Pedido enviado. O Administrador será notificado por WhatsApp (via Supabase).")
+                res = create_access_request(user_key, name, school)
+                if res == "blocked":
+                    st.error("O seu acesso está bloqueado. Não é possível submeter pedido.")
+                elif res == "already_approved":
+                    st.info("Já tem acesso total.")
+                else:
+                    st.success("Pedido enviado. O Administrador será notificado por WhatsApp (via Supabase).")
                 st.rerun()
 
     with col2:
@@ -289,7 +340,7 @@ def access_gate() -> dict:
 
 
 # =========================================================
-# Modelo do Plano (JSON)
+# Plano model (JSON)
 # =========================================================
 class PlanoAula(BaseModel):
     objetivo_geral: str | list[str]
@@ -331,7 +382,7 @@ Escreve SEMPRE em Português de Moçambique. Evita termos e ortografia do Brasil
 
 O plano deve reflectir a realidade do Distrito de Inhassoro, Província de Inhambane, Moçambique.
 
-CONTEXTO LOCAL (obrigatório):
+CONTEXTO LOCAL:
 - Distrito: Inhassoro
 - Posto/Localidade: {ctx["localidade"]}
 - Tipo de escola: {ctx["tipo_escola"]}
@@ -753,100 +804,149 @@ IS_ADMIN = access["is_admin"]
 
 
 # =========================================================
-# ADMIN PAINEL (melhorado)
+# ADMIN KPI + FILTROS + GESTÃO (sidebar)
 # =========================================================
 if IS_ADMIN:
     with st.sidebar:
         st.markdown("---")
         st.markdown("### Painel do Administrador")
 
-        tab_req, tab_users = st.tabs(["Pedidos", "Professores"])
+        users = list_users_df()
+        if users.empty:
+            st.info("Ainda não há professores registados.")
+        else:
+            users2 = usage_stats_users_df(users)
 
-        # ---- Pedidos pendentes
-        with tab_req:
-            pending = list_pending_requests_df()
-            if pending.empty:
-                st.info("Sem pedidos pendentes.")
+            # KPIs topo
+            total_teachers = len(users2)
+            approved_n = int((users2["status"] == "approved").sum()) + int((users2["status"] == "admin").sum())
+            pending_n = int((users2["status"] == "pending").sum())
+            blocked_n = int((users2["status"] == "blocked").sum())
+            today_total = global_today_total()
+
+            st.metric("Professores registados", total_teachers)
+            c1, c2 = st.columns(2)
+            with c1:
+                st.metric("Acesso total", approved_n)
+                st.metric("Bloqueados", blocked_n)
+            with c2:
+                st.metric("Pendentes", pending_n)
+                st.metric("Planos hoje (total)", today_total)
+
+            st.markdown("---")
+
+            # Filtros
+            st.markdown("#### Filtros")
+            status_filter = st.selectbox("Estado", ["Todos", "trial", "pending", "approved", "admin", "blocked"], key="f_status")
+            school_filter = st.text_input("Escola (contém)", value="", key="f_school").strip().lower()
+
+            filt = users2.copy()
+            if status_filter != "Todos":
+                filt = filt[filt["status"] == status_filter]
+            if school_filter:
+                filt = filt[filt["school"].astype(str).str.lower().str.contains(school_filter, na=False)]
+
+            # Tabela resumida no sidebar (top 15)
+            show_cols = ["name", "school", "status", "daily_limit", "today_count", "total_count"]
+            st.dataframe(filt[show_cols].head(15), hide_index=True, use_container_width=True)
+
+            st.markdown("---")
+            st.markdown("#### Gestão de Professor")
+
+            filt["label"] = (
+                filt["name"].astype(str)
+                + " — "
+                + filt["school"].astype(str)
+                + " ("
+                + filt["status"].astype(str)
+                + ")"
+            )
+
+            if len(filt) == 0:
+                st.info("Sem resultados nos filtros.")
             else:
-                st.dataframe(pending, hide_index=True, use_container_width=True)
-
-                sel_id = st.selectbox("Seleccionar ID do pedido", pending["id"].tolist(), key="sel_req_id")
-                colA, colB = st.columns(2)
-
-                with colA:
-                    if st.button("✅ Aprovar", type="primary", key="approve_req"):
-                        sb = supa()
-                        req = sb.table("access_requests").select("*").eq("id", sel_id).limit(1).execute().data[0]
-                        sb.table("access_requests").update(
-                            {"status": "approved", "processed_at": datetime.now().isoformat(), "processed_by": access["name"]}
-                        ).eq("id", sel_id).execute()
-                        set_user_status(req["user_key"], "approved", approved_by=access["name"])
-                        st.success("Pedido aprovado.")
-                        st.rerun()
-
-                with colB:
-                    if st.button("❌ Rejeitar", key="reject_req"):
-                        sb = supa()
-                        sb.table("access_requests").update(
-                            {"status": "rejected", "processed_at": datetime.now().isoformat(), "processed_by": access["name"]}
-                        ).eq("id", sel_id).execute()
-                        # se quiseres, podes manter o user como trial quando rejeita:
-                        # req = sb.table("access_requests").select("*").eq("id", sel_id).limit(1).execute().data[0]
-                        # set_user_status(req["user_key"], "trial")
-                        st.success("Pedido rejeitado.")
-                        st.rerun()
-
-        # ---- Professores (com estatísticas + limite + revogar)
-        with tab_users:
-            users = list_users_df()
-            stats = usage_stats_df()
-            if users.empty:
-                st.info("Ainda não há professores registados.")
-            else:
-                users2 = users.merge(stats, on="user_key", how="left")
-                users2["today_count"] = users2.get("today_count", 0).fillna(0).astype(int)
-                users2["total_count"] = users2.get("total_count", 0).fillna(0).astype(int)
-                if "daily_limit" not in users2.columns:
-                    users2["daily_limit"] = 2
-
-                show_cols = ["name", "school", "status", "daily_limit", "today_count", "total_count", "created_at", "approved_at", "approved_by"]
-                st.dataframe(users2[show_cols], hide_index=True, use_container_width=True)
-
-                st.markdown("#### Gestão de Professor")
-
-                # selector por nome+escola para ficar claro
-                users2["label"] = users2["name"].astype(str) + " — " + users2["school"].astype(str) + " (" + users2["status"].astype(str) + ")"
-                sel_label = st.selectbox("Seleccionar professor", users2["label"].tolist(), key="sel_prof")
-
-                sel_row = users2[users2["label"] == sel_label].iloc[0]
+                sel_label = st.selectbox("Seleccionar", filt["label"].tolist(), key="sel_prof")
+                sel_row = filt[filt["label"] == sel_label].iloc[0]
                 sel_user_key = sel_row["user_key"]
 
-                st.write(f"**Hoje:** {int(sel_row['today_count'])} plano(s) | **Total:** {int(sel_row['total_count'])} plano(s)")
+                st.write(
+                    f"**Hoje:** {int(sel_row['today_count'])} | **Total:** {int(sel_row['total_count'])}"
+                )
 
-                # ajustar limite
                 current_limit = int(sel_row.get("daily_limit", 2) or 2)
-                new_limit = st.number_input("Limite diário (modo teste/pending)", min_value=0, max_value=20, value=current_limit, step=1)
+                new_limit = st.number_input(
+                    "Limite diário (trial/pending)",
+                    min_value=0,
+                    max_value=20,
+                    value=current_limit,
+                    step=1,
+                    key="limit_input",
+                )
 
-                col1, col2, col3 = st.columns(3)
-
-                with col1:
-                    if st.button("💾 Guardar Limite", type="primary", key="save_limit"):
+                colA, colB = st.columns(2)
+                with colA:
+                    if st.button("💾 Guardar limite", type="primary", key="save_limit"):
                         set_daily_limit(sel_user_key, int(new_limit))
                         st.success("Limite actualizado.")
                         st.rerun()
+                with colB:
+                    if st.button("🧹 Reset HOJE", key="reset_today"):
+                        reset_today_count(sel_user_key)
+                        st.success("Contador de hoje resetado.")
+                        st.rerun()
 
-                with col2:
-                    if st.button("✅ Dar Acesso Total", key="force_approve"):
+                colC, colD = st.columns(2)
+                with colC:
+                    if st.button("✅ Aprovar", key="approve_user"):
                         set_user_status(sel_user_key, "approved", approved_by=access["name"])
-                        st.success("Professor aprovado (acesso total).")
+                        st.success("Acesso total concedido.")
+                        st.rerun()
+                with colD:
+                    if st.button("↩️ Revogar", key="revoke_user"):
+                        set_user_status(sel_user_key, "trial")
+                        st.success("Acesso revogado (trial).")
                         st.rerun()
 
-                with col3:
-                    if st.button("🛑 Revogar Acesso", key="revoke_access"):
-                        # volta a trial
-                        set_user_status(sel_user_key, "trial")
-                        st.success("Acesso revogado (voltou para trial).")
+                colE, colF = st.columns(2)
+                with colE:
+                    if st.button("⛔ Bloquear", key="block_user"):
+                        set_user_status(sel_user_key, "blocked")
+                        st.success("Professor bloqueado.")
                         st.rerun()
+                with colF:
+                    if st.button("✅ Desbloquear", key="unblock_user"):
+                        set_user_status(sel_user_key, "trial")
+                        st.success("Professor desbloqueado (trial).")
+                        st.rerun()
+
+        # Pedidos pendentes (rápido)
+        st.markdown("---")
+        st.markdown("### Pedidos pendentes")
+        pending = list_pending_requests_df()
+        if pending.empty:
+            st.caption("Sem pedidos.")
+        else:
+            st.dataframe(pending, hide_index=True, use_container_width=True)
+            sel_id = st.selectbox("ID do pedido", pending["id"].tolist(), key="req_id_sidebar")
+            cX, cY = st.columns(2)
+            with cX:
+                if st.button("✅ Aprovar pedido", type="primary", key="approve_req_sidebar"):
+                    sb = supa()
+                    req = sb.table("access_requests").select("*").eq("id", sel_id).limit(1).execute().data[0]
+                    sb.table("access_requests").update(
+                        {"status": "approved", "processed_at": datetime.now().isoformat(), "processed_by": access["name"]}
+                    ).eq("id", sel_id).execute()
+                    set_user_status(req["user_key"], "approved", approved_by=access["name"])
+                    st.success("Pedido aprovado.")
+                    st.rerun()
+            with cY:
+                if st.button("❌ Rejeitar pedido", key="reject_req_sidebar"):
+                    sb = supa()
+                    sb.table("access_requests").update(
+                        {"status": "rejected", "processed_at": datetime.now().isoformat(), "processed_by": access["name"]}
+                    ).eq("id", sel_id).execute()
+                    st.success("Pedido rejeitado.")
+                    st.rerun()
 
 
 # =========================================================
@@ -858,7 +958,10 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### Contexto da Escola (Inhassoro)")
     localidade = st.text_input("Posto/Localidade", "Inhassoro (Sede)")
-    tipo_escola = st.selectbox("Tipo de escola", ["EPC", "ESG1", "ESG2", "Outra"])
+
+    # TIPOS DE ESCOLA ACTUALIZADOS
+    tipo_escola = st.selectbox("Tipo de escola", ["EP", "EB", "ES1", "ES2", "Outra"])
+
     recursos = st.text_area("Recursos disponíveis", "Quadro, giz/marcador, livros, cadernos.")
     tem_livro_aluno = st.checkbox("Há livro do aluno disponível (1ª–6ª)?", value=True)
     nr_alunos = st.text_input("Nº de alunos", "40 (aprox.)")
@@ -868,7 +971,6 @@ with st.sidebar:
     st.info(f"Escola: {access['school']}")
     st.caption(f"Estado: {USER_STATUS}")
 
-    # mostrar limite real do utilizador
     limit = get_daily_limit(USER_KEY)
     if not is_unlimited(USER_STATUS):
         st.caption(f"Limite diário actual: {get_today_count(USER_KEY)}/{limit}")
@@ -949,7 +1051,7 @@ if st.button("🚀 Gerar Plano de Aula", type="primary", disabled=bool(missing))
             st.session_state["modelo_usado"] = modelo_usado
             st.session_state["plano_base"] = plano.model_dump()
             st.session_state["plano_editado"] = plano.model_dump()
-            st.session_state["editor_df"] = plano_to_df(plano)
+            st.session_state["editor_df"] = pd.DataFrame(plano.tabela, columns=TABLE_COLS)
             st.session_state.pop("preview_imgs", None)
             st.session_state["plano_pronto"] = True
             st.rerun()
@@ -983,7 +1085,7 @@ if st.session_state.get("plano_pronto"):
         oe_new = st.text_area("Objectivos Específicos (um por linha)", value=oe_text, height=130)
 
     with st.expander("Editar tabela (actividades, métodos, meios)", expanded=True):
-        df = st.session_state.get("editor_df", plano_to_df(plano_editado))
+        df = st.session_state.get("editor_df", pd.DataFrame(plano_editado.tabela, columns=TABLE_COLS))
         edited_df = st.data_editor(df, use_container_width=True, hide_index=True, num_rows="dynamic", key="data_editor_plano")
 
     c_apply, c_reset = st.columns(2)
@@ -994,13 +1096,12 @@ if st.session_state.get("plano_pronto"):
                 objetivo_geral = og_lines[:2] if og_lines else ["-"]
             else:
                 objetivo_geral = og_lines[0] if og_lines else "-"
-
             oe_lines = [x.strip() for x in oe_new.split("\n") if x.strip()] or ["-"]
 
             try:
                 plano_novo = df_to_plano(edited_df, objetivo_geral, oe_lines, ctx)
                 st.session_state["plano_editado"] = plano_novo.model_dump()
-                st.session_state["editor_df"] = plano_to_df(plano_novo)
+                st.session_state["editor_df"] = pd.DataFrame(plano_novo.tabela, columns=TABLE_COLS)
                 st.session_state.pop("preview_imgs", None)
                 st.success("Alterações aplicadas. Pré-visualização e PDF actualizados.")
                 st.rerun()
@@ -1011,7 +1112,7 @@ if st.session_state.get("plano_pronto"):
         if st.button("↩️ Repor para o plano gerado pela IA"):
             base = apply_all_enforcers(PlanoAula(**st.session_state["plano_base"]), ctx)
             st.session_state["plano_editado"] = base.model_dump()
-            st.session_state["editor_df"] = plano_to_df(base)
+            st.session_state["editor_df"] = pd.DataFrame(base.tabela, columns=TABLE_COLS)
             st.session_state.pop("preview_imgs", None)
             st.success("Plano reposto para a versão original.")
             st.rerun()
