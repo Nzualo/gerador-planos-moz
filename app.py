@@ -2,22 +2,22 @@
 # =========================================================
 # SDEJT - Planos SNE (Inhassoro) | Streamlit + Supabase
 #
-# Actualizações incluídas nesta versão:
-# 1) Tipos de escola actualizados: EP, EB, ES1, ES2, Outra
-# 2) Painel Admin melhorado:
-#    - KPI no topo: total de professores, aprovados, pendentes, bloqueados
-#    - KPI: total de planos gerados hoje (global)
-#    - Tabela de professores com filtro por estado e por escola
-#    - Gestão por professor: limite diário, aprovar, revogar, bloquear, desbloquear, reset contador hoje
-# 3) Login: professores entram com Nome + Escola, trial/pending/approved/admin/blocked
-# 4) Limite diário por professor (daily_limit) (modo trial/pending); acesso total ilimitado
-# 5) Plano: Português de Moçambique, regras de presenças+TPC na 1ª função, marcar TPC na última
-# 6) 1ª–6ª: "Livro do aluno" em Meios se disponível
-# 7) Pré-visualização em imagens antes do PDF (fpdf 1.x)
+# Inclui:
+# - Login leve: Nome + Escola
+# - Trial/Pending com limite diário; Approved/Admin ilimitado; Blocked bloqueia
+# - Pedidos de acesso total (admin aprova/rejeita/apaga suspeitos)
+# - Admin: KPIs + filtros + gestão de professores (limite, aprovar, revogar, bloquear, reset hoje, apagar)
+# - Histórico: professor vê planos guardados e baixa novamente (por data/classe)
+# - Ajuda: botão WhatsApp do Admin +258867926665
+# - Plano: PT-MZ, regras 1ª função (presenças + correcção TPC) e última (marcar TPC)
+# - 1ª–6ª: inclui “Livro do aluno” nos Meios quando disponível
+# - Pré-visualização em imagens antes do PDF
+# - Exportação PDF com fpdf (1.x)
 # =========================================================
 
 import json
 import hashlib
+import base64
 from datetime import date, datetime, timedelta
 
 import streamlit as st
@@ -124,6 +124,15 @@ def get_daily_limit(user_key: str) -> int:
         return int(v) if v is not None else 2
     except Exception:
         return 2
+
+
+def delete_user(user_key: str):
+    """
+    Remove completamente o utilizador do sistema.
+    ON DELETE CASCADE remove usage_daily, access_requests e user_plans.
+    """
+    sb = supa()
+    sb.table("app_users").delete().eq("user_key", user_key).execute()
 
 
 def create_access_request(user_key: str, name: str, school: str):
@@ -250,6 +259,57 @@ def global_today_total() -> int:
     return int(d[d["day"] == date.today()]["count"].sum())
 
 
+# -------- Histórico (user_plans) --------
+def save_plan_to_history(user_key: str, ctx: dict, plano_dict: dict, pdf_bytes: bytes):
+    sb = supa()
+    pdf_b64 = base64.b64encode(pdf_bytes).decode("utf-8")
+
+    payload = {
+        "user_key": user_key,
+        "plan_day": datetime.strptime(ctx["data"], "%d/%m/%Y").date().isoformat(),
+        "disciplina": ctx.get("disciplina", ""),
+        "classe": ctx.get("classe", ""),
+        "tema": ctx.get("tema", ""),
+        "unidade": ctx.get("unidade", ""),
+        "turma": ctx.get("turma", ""),
+        "pdf_b64": pdf_b64,
+        "plan_json": {"ctx": ctx, "plano": plano_dict},
+    }
+    sb.table("user_plans").insert(payload).execute()
+
+
+def list_user_plans(user_key: str) -> pd.DataFrame:
+    sb = supa()
+    r = (
+        sb.table("user_plans")
+        .select("id,created_at,plan_day,disciplina,classe,tema,unidade,turma")
+        .eq("user_key", user_key)
+        .order("created_at", desc=True)
+        .execute()
+    )
+    df = pd.DataFrame(r.data or [])
+    if df.empty:
+        return df
+    df["created_at"] = pd.to_datetime(df["created_at"], errors="coerce")
+    df["plan_day"] = pd.to_datetime(df["plan_day"], errors="coerce").dt.date
+    return df
+
+
+def get_plan_pdf_bytes(user_key: str, plan_id: int) -> bytes | None:
+    sb = supa()
+    r = (
+        sb.table("user_plans")
+        .select("pdf_b64")
+        .eq("user_key", user_key)
+        .eq("id", plan_id)
+        .limit(1)
+        .execute()
+    )
+    if not r.data:
+        return None
+    return base64.b64decode(r.data[0]["pdf_b64"])
+
+
 # =========================================================
 # Access Gate UI
 # =========================================================
@@ -272,6 +332,22 @@ def access_gate() -> dict:
                 st.session_state["is_admin"] = False
                 st.session_state.pop("admin_pwd", None)
                 st.rerun()
+
+        st.markdown("---")
+        st.markdown("### Ajuda / Suporte")
+        admin_whatsapp = "258867926665"
+        msg = "Saudações. Preciso de apoio no sistema de planos (SDEJT)."
+        link_zap = f"https://wa.me/{admin_whatsapp}?text={msg.replace(' ', '%20')}"
+        st.markdown(
+            f"""
+<a href="{link_zap}" target="_blank" style="text-decoration:none;">
+  <button style="background-color:#25D366;color:white;border:none;padding:12px 16px;border-radius:8px;width:100%;cursor:pointer;font-size:15px;font-weight:bold;">
+    📱 Falar com o Administrador no WhatsApp
+  </button>
+</a>
+""",
+            unsafe_allow_html=True,
+        )
 
     st.markdown("## 🇲🇿 SDEJT - Elaboração de Planos")
     st.markdown("##### Serviço Distrital de Educação, Juventude e Tecnologia - Inhassoro")
@@ -297,7 +373,7 @@ def access_gate() -> dict:
 
         status = user["status"]
 
-        # Se admin, marca o próprio como admin (ilimitado)
+        # se admin, marca-se como admin
         if is_admin_session():
             if status != "admin":
                 upsert_user(user_key, name, school, "admin")
@@ -328,13 +404,14 @@ def access_gate() -> dict:
                 elif res == "already_approved":
                     st.info("Já tem acesso total.")
                 else:
-                    st.success("Pedido enviado. O Administrador será notificado por WhatsApp (via Supabase).")
+                    st.success("Pedido enviado. O Administrador será notificado via Supabase.")
                 st.rerun()
 
     with col2:
         st.warning("ℹ️ Ajuda")
         st.write("O limite diário pode ser ajustado pelo Administrador.")
         st.write("Depois de aprovado, o acesso é ilimitado.")
+        st.write("Histórico: guarde os seus PDFs para baixar novamente quando quiser.")
 
     return {"user_key": user_key, "name": name, "school": school, "status": status, "is_admin": is_admin_session()}
 
@@ -363,16 +440,16 @@ def safe_extract_json(text: str) -> dict:
         raise
 
 
-def make_cache_key(payload: dict) -> str:
-    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()
-
-
 @st.cache_data(ttl=86400)
 def cached_generate(key: str, prompt: str, model_name: str) -> str:
     model = genai.GenerativeModel(model_name)
     resp = model.generate_content(prompt)
     return resp.text
+
+
+def make_cache_key(payload: dict) -> str:
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
 
 
 def build_prompt(ctx: dict) -> str:
@@ -517,7 +594,7 @@ def apply_all_enforcers(plano: PlanoAula, ctx: dict) -> PlanoAula:
 
 
 # =========================================================
-# Preview PNG
+# Preview PNG (pré-visualização)
 # =========================================================
 def wrap_text(draw, text, font, max_width):
     words = (text or "").split()
@@ -562,7 +639,7 @@ def plano_to_preview_images(ctx: dict, plano: PlanoAula) -> list[Image.Image]:
         draw.text((margin, y), "PLANO DE AULA", font=font_title, fill="black")
         return y + 60
 
-    # Página 1
+    # Página 1 (metadados + objectivos)
     img, draw = new_page()
     y = header(draw, margin)
 
@@ -598,7 +675,7 @@ def plano_to_preview_images(ctx: dict, plano: PlanoAula) -> list[Image.Image]:
 
     imgs.append(img)
 
-    # Tabela
+    # Página(s) da tabela
     headers = ["Tempo", "Função Didáctica", "Activ. Professor", "Activ. Aluno", "Métodos", "Meios"]
     col_w = [90, 210, 300, 300, 160, 160]
     start_x = margin
@@ -767,10 +844,6 @@ def create_pdf(ctx: dict, plano: PlanoAula) -> bytes:
 # =========================================================
 # Edit helpers
 # =========================================================
-def plano_to_df(plano: PlanoAula) -> pd.DataFrame:
-    return pd.DataFrame(plano.tabela, columns=TABLE_COLS)
-
-
 def df_to_plano(df: pd.DataFrame, objetivo_geral, objetivos_especificos_list, ctx: dict) -> PlanoAula:
     rows = []
     for _, r in df.iterrows():
@@ -804,7 +877,7 @@ IS_ADMIN = access["is_admin"]
 
 
 # =========================================================
-# ADMIN KPI + FILTROS + GESTÃO (sidebar)
+# ADMIN SIDEBAR: KPIs + filtros + gestão + pedidos
 # =========================================================
 if IS_ADMIN:
     with st.sidebar:
@@ -812,12 +885,9 @@ if IS_ADMIN:
         st.markdown("### Painel do Administrador")
 
         users = list_users_df()
-        if users.empty:
-            st.info("Ainda não há professores registados.")
-        else:
+        if not users.empty:
             users2 = usage_stats_users_df(users)
 
-            # KPIs topo
             total_teachers = len(users2)
             approved_n = int((users2["status"] == "approved").sum()) + int((users2["status"] == "admin").sum())
             pending_n = int((users2["status"] == "pending").sum())
@@ -834,123 +904,187 @@ if IS_ADMIN:
                 st.metric("Planos hoje (total)", today_total)
 
             st.markdown("---")
-
-            # Filtros
             st.markdown("#### Filtros")
             status_filter = st.selectbox("Estado", ["Todos", "trial", "pending", "approved", "admin", "blocked"], key="f_status")
             school_filter = st.text_input("Escola (contém)", value="", key="f_school").strip().lower()
+            name_filter = st.text_input("Nome (contém)", value="", key="f_name").strip().lower()
 
             filt = users2.copy()
             if status_filter != "Todos":
                 filt = filt[filt["status"] == status_filter]
             if school_filter:
                 filt = filt[filt["school"].astype(str).str.lower().str.contains(school_filter, na=False)]
+            if name_filter:
+                filt = filt[filt["name"].astype(str).str.lower().str.contains(name_filter, na=False)]
 
-            # Tabela resumida no sidebar (top 15)
             show_cols = ["name", "school", "status", "daily_limit", "today_count", "total_count"]
             st.dataframe(filt[show_cols].head(15), hide_index=True, use_container_width=True)
 
             st.markdown("---")
             st.markdown("#### Gestão de Professor")
 
-            filt["label"] = (
-                filt["name"].astype(str)
-                + " — "
-                + filt["school"].astype(str)
-                + " ("
-                + filt["status"].astype(str)
-                + ")"
-            )
-
-            if len(filt) == 0:
-                st.info("Sem resultados nos filtros.")
-            else:
+            if len(filt) > 0:
+                filt = filt.copy()
+                filt["label"] = filt["name"].astype(str) + " — " + filt["school"].astype(str) + " (" + filt["status"].astype(str) + ")"
                 sel_label = st.selectbox("Seleccionar", filt["label"].tolist(), key="sel_prof")
                 sel_row = filt[filt["label"] == sel_label].iloc[0]
                 sel_user_key = sel_row["user_key"]
 
-                st.write(
-                    f"**Hoje:** {int(sel_row['today_count'])} | **Total:** {int(sel_row['total_count'])}"
-                )
+                st.write(f"**Hoje:** {int(sel_row['today_count'])} | **Total:** {int(sel_row['total_count'])}")
 
                 current_limit = int(sel_row.get("daily_limit", 2) or 2)
-                new_limit = st.number_input(
-                    "Limite diário (trial/pending)",
-                    min_value=0,
-                    max_value=20,
-                    value=current_limit,
-                    step=1,
-                    key="limit_input",
-                )
+                new_limit = st.number_input("Limite diário (trial/pending)", min_value=0, max_value=20, value=current_limit, step=1, key="limit_input")
 
-                colA, colB = st.columns(2)
-                with colA:
+                a, b = st.columns(2)
+                with a:
                     if st.button("💾 Guardar limite", type="primary", key="save_limit"):
                         set_daily_limit(sel_user_key, int(new_limit))
                         st.success("Limite actualizado.")
                         st.rerun()
-                with colB:
+                with b:
                     if st.button("🧹 Reset HOJE", key="reset_today"):
                         reset_today_count(sel_user_key)
                         st.success("Contador de hoje resetado.")
                         st.rerun()
 
-                colC, colD = st.columns(2)
-                with colC:
+                c, d = st.columns(2)
+                with c:
                     if st.button("✅ Aprovar", key="approve_user"):
                         set_user_status(sel_user_key, "approved", approved_by=access["name"])
                         st.success("Acesso total concedido.")
                         st.rerun()
-                with colD:
+                with d:
                     if st.button("↩️ Revogar", key="revoke_user"):
                         set_user_status(sel_user_key, "trial")
                         st.success("Acesso revogado (trial).")
                         st.rerun()
 
-                colE, colF = st.columns(2)
-                with colE:
+                e, f = st.columns(2)
+                with e:
                     if st.button("⛔ Bloquear", key="block_user"):
                         set_user_status(sel_user_key, "blocked")
                         st.success("Professor bloqueado.")
                         st.rerun()
-                with colF:
+                with f:
                     if st.button("✅ Desbloquear", key="unblock_user"):
                         set_user_status(sel_user_key, "trial")
                         st.success("Professor desbloqueado (trial).")
                         st.rerun()
 
-        # Pedidos pendentes (rápido)
+                st.markdown("#### Remover utilizador estranho")
+                confirm_del = st.checkbox("Confirmo apagar (irreversível).", key="confirm_delete_user")
+                if st.button("🗑️ Apagar utilizador", disabled=not confirm_del, key="delete_user_btn"):
+                    delete_user(sel_user_key)
+                    st.success("Utilizador apagado (inclui histórico/pedidos/contadores).")
+                    st.rerun()
+
         st.markdown("---")
         st.markdown("### Pedidos pendentes")
         pending = list_pending_requests_df()
+
         if pending.empty:
-            st.caption("Sem pedidos.")
+            st.caption("Sem pedidos pendentes.")
         else:
-            st.dataframe(pending, hide_index=True, use_container_width=True)
-            sel_id = st.selectbox("ID do pedido", pending["id"].tolist(), key="req_id_sidebar")
-            cX, cY = st.columns(2)
-            with cX:
+            pending = pending.copy()
+            pending["label"] = pending["name"].astype(str) + " — " + pending["school"].astype(str) + " (ID " + pending["id"].astype(str) + ")"
+            st.dataframe(pending[["id", "name", "school", "created_at"]], hide_index=True, use_container_width=True)
+
+            sel_label = st.selectbox("Seleccionar pedido (Nome — Escola)", pending["label"].tolist(), key="req_label_sidebar")
+            sel_row = pending[pending["label"] == sel_label].iloc[0]
+            sel_id = int(sel_row["id"])
+            sel_user_key = sel_row["user_key"]
+
+            st.info(f"Pedido de: **{sel_row['name']}** | Escola: **{sel_row['school']}**")
+
+            x, y, z = st.columns(3)
+            with x:
                 if st.button("✅ Aprovar pedido", type="primary", key="approve_req_sidebar"):
                     sb = supa()
-                    req = sb.table("access_requests").select("*").eq("id", sel_id).limit(1).execute().data[0]
                     sb.table("access_requests").update(
                         {"status": "approved", "processed_at": datetime.now().isoformat(), "processed_by": access["name"]}
                     ).eq("id", sel_id).execute()
-                    set_user_status(req["user_key"], "approved", approved_by=access["name"])
+                    set_user_status(sel_user_key, "approved", approved_by=access["name"])
                     st.success("Pedido aprovado.")
                     st.rerun()
-            with cY:
+
+            with y:
                 if st.button("❌ Rejeitar pedido", key="reject_req_sidebar"):
                     sb = supa()
                     sb.table("access_requests").update(
                         {"status": "rejected", "processed_at": datetime.now().isoformat(), "processed_by": access["name"]}
                     ).eq("id", sel_id).execute()
-                    st.success("Pedido rejeitado.")
+                    set_user_status(sel_user_key, "trial")
+                    st.success("Pedido rejeitado (voltou para trial).")
+                    st.rerun()
+
+            with z:
+                if st.button("🗑️ Apagar utilizador (suspeito)", key="delete_user_from_req"):
+                    delete_user(sel_user_key)
+                    st.success("Utilizador removido do sistema.")
                     st.rerun()
 
 
 # =========================================================
-# APP PRINCIPAL
+# HISTÓRICO DO PROFESSOR (antes de gerar)
+# =========================================================
+st.divider()
+st.subheader("📚 Meus Planos (Histórico)")
+
+hist = list_user_plans(USER_KEY)
+
+if hist.empty:
+    st.info("Ainda não há planos guardados no seu histórico.")
+else:
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        classe_f = st.selectbox("Filtrar por classe", ["Todas"] + sorted(hist["classe"].astype(str).unique().tolist()))
+    with c2:
+        datas = sorted({str(d) for d in hist["plan_day"].dropna().tolist()})
+        data_f = st.selectbox("Filtrar por data do plano", ["Todas"] + datas)
+    with c3:
+        ordem = st.selectbox("Ordenar", ["Mais recente", "Mais antigo"])
+
+    dfh = hist.copy()
+    if classe_f != "Todas":
+        dfh = dfh[dfh["classe"].astype(str) == classe_f]
+    if data_f != "Todas":
+        dfh = dfh[dfh["plan_day"].astype(str) == data_f]
+
+    dfh = dfh.sort_values("created_at", ascending=(ordem == "Mais antigo"))
+    dfh["label"] = (
+        dfh["plan_day"].astype(str)
+        + " | "
+        + dfh["classe"].astype(str)
+        + " | "
+        + dfh["disciplina"].astype(str)
+        + " | "
+        + dfh["tema"].astype(str)
+    )
+
+    st.dataframe(
+        dfh[["plan_day", "classe", "disciplina", "tema", "unidade", "turma", "created_at"]],
+        hide_index=True,
+        use_container_width=True,
+    )
+
+    sel = st.selectbox("Seleccionar um plano para baixar novamente", dfh["label"].tolist())
+    plan_id = int(dfh[dfh["label"] == sel].iloc[0]["id"])
+
+    pdf_bytes_hist = get_plan_pdf_bytes(USER_KEY, plan_id)
+    if pdf_bytes_hist:
+        st.download_button(
+            "⬇️ Baixar PDF deste plano",
+            data=pdf_bytes_hist,
+            file_name=f"Plano_{sel}.pdf".replace(" ", "_").replace("|", "-"),
+            mime="application/pdf",
+            type="primary",
+        )
+    else:
+        st.error("Não foi possível carregar o PDF deste plano.")
+
+
+# =========================================================
+# APP PRINCIPAL (gerar novo plano)
 # =========================================================
 st.title("🇲🇿 Elaboração de Planos de Aulas (SNE)")
 
@@ -958,10 +1092,7 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### Contexto da Escola (Inhassoro)")
     localidade = st.text_input("Posto/Localidade", "Inhassoro (Sede)")
-
-    # TIPOS DE ESCOLA ACTUALIZADOS
     tipo_escola = st.selectbox("Tipo de escola", ["EP", "EB", "ES1", "ES2", "Outra"])
-
     recursos = st.text_area("Recursos disponíveis", "Quadro, giz/marcador, livros, cadernos.")
     tem_livro_aluno = st.checkbox("Há livro do aluno disponível (1ª–6ª)?", value=True)
     nr_alunos = st.text_input("Nº de alunos", "40 (aprox.)")
@@ -970,10 +1101,8 @@ with st.sidebar:
     st.success(f"Professor: {access['name']}")
     st.info(f"Escola: {access['school']}")
     st.caption(f"Estado: {USER_STATUS}")
-
-    limit = get_daily_limit(USER_KEY)
     if not is_unlimited(USER_STATUS):
-        st.caption(f"Limite diário actual: {get_today_count(USER_KEY)}/{limit}")
+        st.caption(f"Limite diário: {get_today_count(USER_KEY)}/{get_daily_limit(USER_KEY)}")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -1044,6 +1173,7 @@ if st.button("🚀 Gerar Plano de Aula", type="primary", disabled=bool(missing))
             raw = safe_extract_json(texto)
             plano = apply_all_enforcers(PlanoAula(**raw), ctx)
 
+            # contar uso diário (só trial/pending)
             if not is_unlimited(USER_STATUS):
                 inc_today_count(USER_KEY)
 
@@ -1065,13 +1195,12 @@ if st.button("🚀 Gerar Plano de Aula", type="primary", disabled=bool(missing))
 
 
 # =========================================================
-# RESULTADO + EDIÇÃO + PREVIEW + PDF
+# RESULTADO + EDIÇÃO + PREVIEW + PDF + GUARDAR NO HISTÓRICO
 # =========================================================
 if st.session_state.get("plano_pronto"):
     st.divider()
     st.subheader("✅ Plano Gerado com Sucesso")
     st.caption(f"Modelo IA usado: {st.session_state.get('modelo_usado', '-')}")
-
     ctx = st.session_state["ctx"]
     plano_editado = PlanoAula(**st.session_state["plano_editado"])
 
@@ -1087,6 +1216,7 @@ if st.session_state.get("plano_pronto"):
     with st.expander("Editar tabela (actividades, métodos, meios)", expanded=True):
         df = st.session_state.get("editor_df", pd.DataFrame(plano_editado.tabela, columns=TABLE_COLS))
         edited_df = st.data_editor(df, use_container_width=True, hide_index=True, num_rows="dynamic", key="data_editor_plano")
+        st.caption("O sistema força presenças+TPC (1ª função), marca TPC (última) e inclui 'Livro do aluno' (1ª–6ª se disponível).")
 
     c_apply, c_reset = st.columns(2)
     with c_apply:
@@ -1127,14 +1257,31 @@ if st.session_state.get("plano_pronto"):
 
     st.divider()
     st.subheader("📄 Exportação")
+
     try:
         pdf_bytes = create_pdf(ctx, plano_final)
-        st.download_button(
-            "📄 Baixar PDF Oficial",
-            data=pdf_bytes,
-            file_name=f"Plano_{ctx['disciplina']}_{ctx['classe']}_{ctx['tema']}.pdf".replace(" ", "_"),
-            mime="application/pdf",
-            type="primary",
-        )
+
+        colA, colB = st.columns(2)
+
+        with colA:
+            if st.button("💾 Guardar no histórico e baixar", type="primary"):
+                save_plan_to_history(USER_KEY, ctx, plano_final.model_dump(), pdf_bytes)
+                st.success("Plano guardado no seu histórico.")
+                st.download_button(
+                    "⬇️ Baixar PDF agora",
+                    data=pdf_bytes,
+                    file_name=f"Plano_{ctx['disciplina']}_{ctx['classe']}_{ctx['tema']}.pdf".replace(" ", "_"),
+                    mime="application/pdf",
+                    type="primary",
+                )
+
+        with colB:
+            st.download_button(
+                "📄 Baixar PDF (sem guardar)",
+                data=pdf_bytes,
+                file_name=f"Plano_{ctx['disciplina']}_{ctx['classe']}_{ctx['tema']}.pdf".replace(" ", "_"),
+                mime="application/pdf",
+            )
+
     except Exception as e:
         st.error(f"Erro ao criar PDF: {e}")
