@@ -1,125 +1,95 @@
 import streamlit as st
-from utils import supa, pin_hash, make_user_key, normalize_text
-from datetime import datetime
 
-# ---------------------------
-# Escolas
-# ---------------------------
-@st.cache_data(ttl=3600)
-def load_schools_map():
-    sb = supa()
-    r = sb.table("schools").select("name,name_norm").eq("active", True).execute()
-    rows = r.data or []
-    return {row["name_norm"]: row["name"] for row in rows}
+from auth import auth_gate
+from admin import admin_panel
+from plans import plans_ui
+from utils import get_user_by_key
 
-def normalize_school_name(s: str) -> str:
-    s = normalize_text(s)
 
-    s = s.replace("escola primaria", "ep")
-    s = s.replace("escola basica", "eb")
-    s = s.replace("escola secundaria", "es")
+st.set_page_config(
+    page_title="SDEJT - Planos SNE",
+    page_icon="🇲🇿",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
 
-    if s == "sdejt":
-        s = "sdejt de inhassoro"
+# Secrets essenciais
+required = ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "PIN_PEPPER", "ADMIN_PASSWORD", "GOOGLE_API_KEY"]
+missing = [k for k in required if k not in st.secrets]
+if missing:
+    st.error(f"Faltam Secrets: {', '.join(missing)}")
+    st.stop()
 
-    return s
+# Login (Registo/Entrar)
+auth_gate()
 
-def get_official_school(school_input: str) -> str | None:
-    schools = load_schools_map()
-    key = normalize_school_name(school_input)
-    return schools.get(key)
+# Sessão do utilizador
+user = st.session_state.get("user")
+if not user:
+    st.error("Sessão inválida. Faça login novamente.")
+    st.stop()
 
-# ---------------------------
-# Utilizador
-# ---------------------------
-def get_user_by_key(user_key: str):
-    sb = supa()
-    r = sb.table("app_users").select("*").eq("user_key", user_key).limit(1).execute()
-    return r.data[0] if r.data else None
+# 🔄 REFRESH DO UTILIZADOR NO DB (resolve trial ficar mesmo após aprovação)
+fresh = get_user_by_key(user["user_key"])
+if fresh:
+    st.session_state["user"] = fresh
+    user = fresh
 
-def create_user(name: str, school: str, pin: str):
-    user_key = make_user_key(name, school)
-    sb = supa()
+# Header
+st.title("MZ SDEJT - Elaboração de Planos")
+st.caption(
+    f"Professor: {user.get('name','-')} | "
+    f"Escola: {user.get('school','-')} | "
+    f"Estado: {user.get('status','trial')}"
+)
+st.divider()
 
-    exists = sb.table("app_users").select("user_key").eq("user_key", user_key).limit(1).execute()
-    if exists.data:
-        return False, "Utilizador já existe. Use Entrar."
+# Sidebar (Sair + Refresh)
+with st.sidebar:
+    if st.button("🔄 Atualizar estado", use_container_width=True):
+        fresh2 = get_user_by_key(st.session_state["user"]["user_key"])
+        if fresh2:
+            st.session_state["user"] = fresh2
+        st.rerun()
 
-    sb.table("app_users").insert({
-        "user_key": user_key,
-        "name": name.strip(),
-        "school": school.strip(),
-        "pin_hash": pin_hash(pin),
-        "status": "trial",
-        "created_at": datetime.now().isoformat()
-    }).execute()
+    if st.button("🚪 Sair", use_container_width=True):
+        st.session_state.pop("logged_in", None)
+        st.session_state.pop("user", None)
+        st.session_state.pop("is_admin", None)
+        st.rerun()
 
-    return True, user_key
+# Abas
+tab_planos, tab_admin = st.tabs(["📘 Planos", "🛠️ Admin"])
 
-def login_user(name: str, pin: str):
-    sb = supa()
-    r = sb.table("app_users").select("*").eq("name", name.strip()).execute()
-    users = r.data or []
+with tab_planos:
+    plans_ui(user)
 
-    if not users:
-        return False, "Utilizador não encontrado."
+with tab_admin:
+    st.subheader("🛠️ Administração")
 
-    ph = pin_hash(pin)
-    for u in users:
-        if u.get("pin_hash") == ph:
-            return True, u
+    # Admin já autenticado
+    if st.session_state.get("is_admin"):
+        st.success("Sessão de administrador activa.")
 
-    return False, "PIN inválido."
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            if st.button("Sair do Admin", use_container_width=True):
+                st.session_state["is_admin"] = False
+                st.rerun()
+        with c2:
+            st.info("Use o painel abaixo para gerir utilizadores, pedidos, currículo e planos.")
 
-# ---------------------------
-# UI Gate
-# ---------------------------
-def auth_gate():
-    if st.session_state.get("logged_in"):
-        return
+        admin_panel(admin_name=user.get("name", "Admin"))
 
-    st.markdown("## 🇲🇿 SDEJT - Acesso ao Sistema")
+    # Login Admin
+    else:
+        st.info("Introduza a senha do Administrador para aceder ao painel.")
+        admin_pwd = st.text_input("Senha do Administrador", type="password", key="admin_pwd_tab")
 
-    tabs = st.tabs(["🆕 Primeiro Registo", "🔐 Entrar"])
-
-    with tabs[0]:
-        name = st.text_input("Nome do Professor")
-        school = st.text_input("Escola")
-        pin1 = st.text_input("Criar PIN", type="password")
-        pin2 = st.text_input("Confirmar PIN", type="password")
-
-        if st.button("Registar"):
-            if not all([name, school, pin1, pin2]):
-                st.error("Preencha todos os campos.")
-                st.stop()
-            if pin1 != pin2:
-                st.error("PINs não coincidem.")
-                st.stop()
-
-            school_official = get_official_school(school)
-            if not school_official:
-                st.error("Escola não registada.")
-                st.stop()
-
-            ok, result = create_user(name, school_official, pin1)
-            if not ok:
-                st.error(result)
-                st.stop()
-
-            st.session_state["logged_in"] = True
-            st.session_state["user"] = get_user_by_key(result)
-            st.rerun()
-
-    with tabs[1]:
-        name = st.text_input("Nome")
-        pin = st.text_input("PIN", type="password")
-
-        if st.button("Entrar"):
-            ok, result = login_user(name, pin)
-            if not ok:
-                st.error(result)
-                st.stop()
-
-            st.session_state["logged_in"] = True
-            st.session_state["user"] = result
-            st.rerun()
+        if st.button("Entrar como Admin", type="primary", use_container_width=True, key="admin_login_btn"):
+            if admin_pwd == st.secrets["ADMIN_PASSWORD"]:
+                st.session_state["is_admin"] = True
+                st.success("Entrou como Admin.")
+                st.rerun()
+            else:
+                st.error("Senha inválida.")
