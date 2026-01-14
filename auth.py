@@ -1,51 +1,51 @@
-import hashlib
-import unicodedata
 import streamlit as st
-from supabase import create_client
+from utils import supa, pin_hash, make_user_key, normalize_text
 
 
-# =========================
-# Supabase
-# =========================
-def supa():
-    return create_client(
-        st.secrets["SUPABASE_URL"],
-        st.secrets["SUPABASE_SERVICE_ROLE_KEY"]
-    )
+def auth_gate():
+    # Já logado
+    if st.session_state.get("logged_in"):
+        return
 
+    st.title("🔐 Acesso ao Sistema SDEJT")
 
-# =========================
-# Texto / Normalização
-# =========================
-def normalize_text(text: str) -> str:
-    if not text:
-        return ""
-    text = text.strip().lower()
-    text = unicodedata.normalize("NFKD", text)
-    return "".join(c for c in text if not unicodedata.combining(c))
+    nome = st.text_input("Nome do Professor")
+    escola = st.text_input("Escola onde lecciona")
+    pin = st.text_input("PIN", type="password")
 
+    if st.button("Entrar"):
+        if not nome or not escola or not pin:
+            st.error("Preencha todos os campos.")
+            st.stop()
 
-# =========================
-# User Key
-# =========================
-def make_user_key(name: str, school: str) -> str:
-    raw = normalize_text(name + "|" + school).encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()
+        nome_n = normalize_text(nome)
+        escola_n = normalize_text(escola)
 
+        user_key = make_user_key(nome_n, escola_n)
+        sb = supa()
 
-# =========================
-# PIN
-# =========================
-def pin_hash(pin: str) -> str:
-    pepper = st.secrets["PIN_PEPPER"]
-    raw = (pin + pepper).encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()
+        r = sb.table("app_users").select("*").eq("user_key", user_key).limit(1).execute()
 
+        # Primeiro acesso → criar utilizador
+        if not r.data:
+            sb.table("app_users").insert({
+                "user_key": user_key,
+                "name": nome,
+                "school": escola,
+                "pin_hash": pin_hash(pin),
+                "status": "trial",
+            }).execute()
 
-# =========================
-# Users
-# =========================
-def get_user_by_key(user_key: str):
-    sb = supa()
-    r = sb.table("app_users").select("*").eq("user_key", user_key).limit(1).execute()
-    return r.data[0] if r.data else None
+            user = sb.table("app_users").select("*").eq("user_key", user_key).limit(1).execute().data[0]
+
+        else:
+            user = r.data[0]
+
+            if user["pin_hash"] != pin_hash(pin):
+                st.error("PIN incorrecto.")
+                st.stop()
+
+        st.session_state["logged_in"] = True
+        st.session_state["user"] = user
+        st.success("Login efectuado com sucesso.")
+        st.rerun()
