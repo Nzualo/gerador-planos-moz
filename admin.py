@@ -67,7 +67,7 @@ def list_plans_all_df(days_back: int = 30) -> pd.DataFrame:
 
 
 def admin_panel(admin_name: str = "Admin"):
-    st.sidebar.success(f"Administrador: {admin_name}")
+    st.success(f"Administrador: {admin_name}")
 
     tabs = st.tabs(["📊 Dashboard", "👥 Utilizadores", "📚 Planos (Todos)"])
 
@@ -87,7 +87,12 @@ def admin_panel(admin_name: str = "Admin"):
             st.info("Ainda sem dados suficientes.")
         else:
             p = plans.merge(users[["user_key","name","school"]], on="user_key", how="left")
-            by_school = p.groupby("school", as_index=False).size().rename(columns={"size":"planos"}).sort_values("planos", ascending=False)
+            by_school = (
+                p.groupby("school", as_index=False)
+                .size()
+                .rename(columns={"size":"planos"})
+                .sort_values("planos", ascending=False)
+            )
             st.subheader("Planos por Escola")
             st.dataframe(by_school, use_container_width=True, hide_index=True)
 
@@ -108,28 +113,33 @@ def admin_panel(admin_name: str = "Admin"):
 
         colA, colB, colC = st.columns(3)
         with colA:
-            if st.button("✅ Aprovar"):
+            if st.button("✅ Aprovar", use_container_width=True):
                 set_user_status(user_key, "approved", approved_by=admin_name)
                 st.success("Aprovado.")
                 st.rerun()
-            if st.button("↩️ Revogar (Trial)"):
+            if st.button("↩️ Revogar (Trial)", use_container_width=True):
                 set_user_status(user_key, "trial")
                 st.success("Revogado.")
                 st.rerun()
 
         with colB:
-            if st.button("⛔ Bloquear"):
+            if st.button("⛔ Bloquear", use_container_width=True):
                 set_user_status(user_key, "blocked")
                 st.success("Bloqueado.")
                 st.rerun()
-            if st.button("✅ Desbloquear"):
+            if st.button("✅ Desbloquear", use_container_width=True):
                 set_user_status(user_key, "trial")
                 st.success("Desbloqueado.")
                 st.rerun()
 
         with colC:
-            new_limit = st.number_input("Limite diário (trial/pending)", min_value=0, max_value=20, value=int(row.get("daily_limit",2) or 2), step=1)
-            if st.button("💾 Guardar limite"):
+            new_limit = st.number_input(
+                "Limite diário (trial/pending)",
+                min_value=0, max_value=20,
+                value=int(row.get("daily_limit", 2) or 2),
+                step=1
+            )
+            if st.button("💾 Guardar limite", use_container_width=True):
                 set_daily_limit(user_key, int(new_limit))
                 st.success("Limite actualizado.")
                 st.rerun()
@@ -137,7 +147,7 @@ def admin_panel(admin_name: str = "Admin"):
         st.markdown("---")
         st.subheader("🔐 Redefinir PIN")
         new_pin = st.text_input("Novo PIN temporário", type="password")
-        if st.button("🔁 Redefinir PIN"):
+        if st.button("🔁 Redefinir PIN", use_container_width=True):
             if not new_pin or len(new_pin) < 4:
                 st.error("PIN inválido (mínimo 4).")
             else:
@@ -147,7 +157,7 @@ def admin_panel(admin_name: str = "Admin"):
         st.markdown("---")
         st.subheader("🗑️ Apagar utilizador")
         confirm = st.checkbox("Confirmo apagar (irreversível).")
-        if st.button("Apagar", disabled=not confirm):
+        if st.button("Apagar", disabled=not confirm, use_container_width=True):
             delete_user(user_key)
             st.success("Utilizador apagado.")
             st.rerun()
