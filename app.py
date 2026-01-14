@@ -20,13 +20,13 @@ st.markdown(
 )
 
 # Secrets essenciais
-required = ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "PIN_PEPPER", "ADMIN_PASSWORD"]
+required = ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "PIN_PEPPER", "ADMIN_PASSWORD", "GOOGLE_API_KEY"]
 missing = [k for k in required if k not in st.secrets]
 if missing:
     st.error(f"Faltam Secrets: {', '.join(missing)}")
     st.stop()
 
-# 1) Autenticação (se não estiver logado, o auth_gate para a app)
+# 1) Autenticação
 auth_gate()
 
 # 2) User da sessão
@@ -35,16 +35,52 @@ if not user:
     st.error("Sessão inválida. Faça login novamente.")
     st.stop()
 
-# Header simples
+# Header
 st.markdown("## MZ SDEJT - Elaboração de Planos")
-st.caption(f"Professor: {user.get('name','-')} | Escola: {user.get('school','-')} | Estado: {user.get('status','trial')}")
+st.caption(
+    f"Professor: {user.get('name','-')} | "
+    f"Escola: {user.get('school','-')} | "
+    f"Estado: {user.get('status','trial')}"
+)
 st.divider()
 
-# 3) Admin (se tiver sessão admin ativa no sidebar, mostra painel)
-#    Você já tem a lógica de admin password no seu fluxo; se quiser manter, podemos integrar depois.
-if st.session_state.get("is_admin"):
-    admin_panel(admin_name=user.get("name", "Admin"))
-    st.divider()
+# Botão de sair (opcional, mas recomendado)
+with st.sidebar:
+    if st.button("🚪 Sair"):
+        st.session_state.pop("logged_in", None)
+        st.session_state.pop("user", None)
+        st.session_state.pop("is_admin", None)
+        st.rerun()
 
-# 4) Área de planos (Professor)
-plans_ui(user)
+# 3) Abas principais
+tab_planos, tab_admin = st.tabs(["📘 Planos", "🛠️ Admin"])
+
+with tab_planos:
+    plans_ui(user)
+
+with tab_admin:
+    st.subheader("🛠️ Administração")
+
+    # Se já está admin, mostra painel + botão sair do admin
+    if st.session_state.get("is_admin"):
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            st.success("Sessão de administrador activa.")
+        with col2:
+            if st.button("Sair do Admin"):
+                st.session_state["is_admin"] = False
+                st.rerun()
+
+        admin_panel(admin_name=user.get("name", "Admin"))
+
+    else:
+        st.info("Introduza a senha do Administrador para aceder ao painel.")
+        admin_pwd = st.text_input("Senha do Administrador", type="password")
+
+        if st.button("Entrar como Admin", type="primary"):
+            if admin_pwd == st.secrets["ADMIN_PASSWORD"]:
+                st.session_state["is_admin"] = True
+                st.success("Entrou como Admin.")
+                st.rerun()
+            else:
+                st.error("Senha inválida.")
