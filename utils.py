@@ -38,3 +38,7 @@ def pin_hash(pin: str) -> str:
 def make_user_key(name: str, school: str) -> str:
     raw = (name.strip().lower() + "|" + school.strip().lower()).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
+def get_user_by_key(user_key: str):
+    sb = supa()
+    r = sb.table("app_users").select("*").eq("user_key", user_key).limit(1).execute()
+    return r.data[0] if r.data else None
