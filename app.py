@@ -6,11 +6,18 @@
 # - Biblioteca do Currículo (curriculum_snippets)
 # - Admin: aprovar/revogar/bloquear/apagar/limites + gerir currículo
 # - Ajuda: WhatsApp +258867926665
+#
+# ALTERAÇÃO (LOGIN SIMPLES):
+# - 1ª vez: Nome + Escola (validada na tabela schools) + PIN
+# - Depois: Nome + PIN
+# - Escola inválida no registo -> não entra
 # =========================================================
 
 import json
 import hashlib
 import base64
+import re
+import unicodedata
 from datetime import date, datetime
 
 import requests
@@ -59,11 +66,129 @@ def today_iso() -> str:
     return date.today().isoformat()
 
 
-def make_user_key(name: str, school: str) -> str:
-    raw = (name.strip().lower() + "|" + school.strip().lower()).encode("utf-8")
+# -------------------------
+# LOGIN SIMPLES (Nome + Escola + PIN / Nome + PIN)
+# -------------------------
+def _strip_accents(s: str) -> str:
+    s = unicodedata.normalize("NFD", s)
+    return "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
+
+
+def normalize_school_name(s: str) -> str:
+    s = (s or "").strip().lower()
+    s = _strip_accents(s)
+
+    # remover aspas e pontuação básica
+    s = re.sub(r'["“”]', "", s)
+    s = s.replace(".", " ").replace(",", " ")
+    s = re.sub(r"\s+", " ", s).strip()
+
+    # aceitar formas longas no lugar de siglas (apenas no início)
+    s = re.sub(r"^escola primaria\b", "ep", s)
+    s = re.sub(r"^escola basica\b", "eb", s)
+    s = re.sub(r"^escola secundaria\b", "es", s)
+
+    # aceitar Serviço Distrital por extenso -> SDEJT
+    s = re.sub(r"^servico distrital de educacao juventude e tecnologia\b", "sdejt", s)
+    s = re.sub(r"^servico distrital de educacao\b", "sdejt", s)
+
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def pin_hash(pin: str) -> str:
+    if "PIN_PEPPER" not in st.secrets:
+        st.error("Configure PIN_PEPPER nos Secrets (ficheiro .streamlit/secrets.toml).")
+        st.stop()
+    pepper = st.secrets["PIN_PEPPER"]
+    raw = (pin.strip() + "|" + pepper).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
 
 
+@st.cache_data(ttl=3600)
+def load_schools_active_map() -> dict:
+    sb = supa()
+    r = sb.table("schools").select("name,name_norm").eq("active", True).order("name").execute()
+    rows = r.data or []
+    return {row["name_norm"]: row["name"] for row in rows}
+
+
+def validate_school_and_get_official(school_input: str) -> str:
+    schools_map = load_schools_active_map()
+    n = normalize_school_name(school_input)
+    if not n or n not in schools_map:
+        return ""
+    return schools_map[n]
+
+
+def compute_user_key(name: str, school_official: str) -> str:
+    raw = (name.strip().lower() + "|" + school_official.strip().lower()).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+# Mantém compatibilidade com o resto do código (que chamava make_user_key)
+def make_user_key(name: str, school: str) -> str:
+    return compute_user_key(name, school)
+
+
+def create_user_first_time(name: str, school_official: str, pin: str) -> tuple[bool, str, str]:
+    """
+    returns: (ok, user_key, error_message)
+    """
+    user_key = compute_user_key(name, school_official)
+
+    sb = supa()
+    existing = sb.table("app_users").select("user_key").eq("user_key", user_key).limit(1).execute()
+    if existing.data:
+        return False, "", "Utilizador já existe. Use 'Entrar' (Nome + PIN)."
+
+    sb.table("app_users").insert(
+        {
+            "user_key": user_key,
+            "name": name.strip(),
+            "school": school_official.strip(),
+            "status": "trial",
+            "pin_hash": pin_hash(pin),
+        }
+    ).execute()
+
+    return True, user_key, ""
+
+
+def login_with_name_pin(name: str, pin: str) -> tuple[bool, dict, str]:
+    """
+    returns: (ok, user_dict, error_message)
+    """
+    sb = supa()
+    r = (
+        sb.table("app_users")
+        .select("user_key,name,school,status,pin_hash")
+        .eq("name", name.strip())
+        .execute()
+    )
+    rows = r.data or []
+    if not rows:
+        return False, {}, "Utilizador não encontrado. Faça o primeiro registo (Nome + Escola + PIN)."
+
+    ph = pin_hash(pin)
+    match = None
+    for u in rows:
+        if u.get("pin_hash") == ph:
+            match = u
+            break
+
+    if not match:
+        return False, {}, "PIN inválido."
+
+    if match.get("status") == "blocked":
+        return False, {}, "O seu acesso está bloqueado. Contacte o Administrador."
+
+    return True, match, ""
+
+
+# =========================
+# Helpers (status)
+# =========================
 def is_admin_session() -> bool:
     return st.session_state.get("is_admin", False)
 
@@ -239,7 +364,9 @@ def usage_stats_users_df(users_df: pd.DataFrame) -> pd.DataFrame:
 
     today = date.today()
     total = d.groupby("user_key", as_index=False)["count"].sum().rename(columns={"count": "total_count"})
-    today_df = d[d["day"] == today].groupby("user_key", as_index=False)["count"].sum().rename(columns={"count": "today_count"})
+    today_df = (
+        d[d["day"] == today].groupby("user_key", as_index=False)["count"].sum().rename(columns={"count": "today_count"})
+    )
     out = users_df.merge(total, on="user_key", how="left").merge(today_df, on="user_key", how="left")
     out["today_count"] = out["today_count"].fillna(0).astype(int)
     out["total_count"] = out["total_count"].fillna(0).astype(int)
@@ -308,25 +435,20 @@ def get_curriculum_context(disciplina: str, classe: str, unidade: str, tema: str
 
     picks = []
 
-    # unidade+tema
     m = (df["unid_n"] == unidade) & (df["tema_n"] == tema) & (unidade != "") & (tema != "")
     picks += df[m]["snippet"].tolist()
 
-    # unidade
     m = (df["unid_n"] == unidade) & (df["tema_n"] == "") & (unidade != "")
     picks += df[m]["snippet"].tolist()
 
-    # tema
     m = (df["unid_n"] == "") & (df["tema_n"] == tema) & (tema != "")
     picks += df[m]["snippet"].tolist()
 
-    # geral
     m = (df["unid_n"] == "") & (df["tema_n"] == "")
     picks += df[m]["snippet"].tolist()
 
-    # reduzir e juntar
     picks = [p.strip() for p in picks if p and p.strip()]
-    picks = picks[:6]  # não exagerar no prompt
+    picks = picks[:6]
 
     if not picks:
         return ""
@@ -355,7 +477,7 @@ def list_user_plans(user_key: str) -> pd.DataFrame:
 
 def save_plan_to_history_storage(user_key: str, ctx: dict, plano_dict: dict, pdf_bytes: bytes):
     """
-    1) Insere linha em user_plans sem PDF
+    1) Insere linha em user_plans
     2) Upload do PDF para Storage (bucket plans)
     3) Actualiza user_plans.pdf_path
     """
@@ -371,7 +493,6 @@ def save_plan_to_history_storage(user_key: str, ctx: dict, plano_dict: dict, pdf
         "tema": ctx.get("tema", ""),
         "unidade": ctx.get("unidade", ""),
         "turma": ctx.get("turma", ""),
-        # compat: manter pdf_b64 vazio por enquanto
         "pdf_b64": base64.b64encode(pdf_bytes).decode("utf-8"),
         "plan_json": {"ctx": ctx, "plano": plano_dict},
         "pdf_path": None
@@ -379,18 +500,15 @@ def save_plan_to_history_storage(user_key: str, ctx: dict, plano_dict: dict, pdf
 
     plan_id = inserted.data[0]["id"]
 
-    # caminho no Storage
     safe_classe = ctx.get("classe", "").replace(" ", "_")
     path = f"{user_key}/{plan_day_iso}/{plan_id}_{safe_classe}.pdf"
 
-    # upload
     sb.storage.from_(BUCKET_PLANS).upload(
         path=path,
         file=pdf_bytes,
         file_options={"content-type": "application/pdf", "upsert": "true"},
     )
 
-    # update
     sb.table("user_plans").update({"pdf_path": path}).eq("id", plan_id).eq("user_key", user_key).execute()
 
 
@@ -416,11 +534,11 @@ def get_plan_pdf_bytes(user_key: str, plan_id: int) -> bytes | None:
     pdf_b64 = r.data[0].get("pdf_b64")
 
     if pdf_path:
-        signed = sb.storage.from_(BUCKET_PLANS).create_signed_url(pdf_path, 60)
+        signed = sb.storage.from_(BUCKET_PLANS).create_signed_url(pdf_path, 600)
         url = signed.get("signedURL") or signed.get("signedUrl") or signed.get("signed_url")
         if not url:
             return None
-        resp = requests.get(url, timeout=30)
+        resp = requests.get(url, timeout=60)
         if resp.status_code == 200:
             return resp.content
 
@@ -434,9 +552,74 @@ def get_plan_pdf_bytes(user_key: str, plan_id: int) -> bytes | None:
 
 
 # =========================
-# Access Gate UI
+# Access Gate UI (NOVO)
 # =========================
 def access_gate() -> dict:
+    # já logado
+    if st.session_state.get("logged_in") and st.session_state.get("user_key"):
+        user_key = st.session_state["user_key"]
+        user = get_user(user_key)
+        if not user:
+            st.session_state.clear()
+            st.rerun()
+
+        status = user.get("status", "trial")
+
+        with st.sidebar:
+            st.markdown("### Sessão")
+            st.success(f"Professor: {user.get('name','-')}")
+            st.info(f"Escola: {user.get('school','-')}")
+            st.caption(f"Estado: {status}")
+
+            if st.button("Sair"):
+                for k in ["logged_in", "user_key", "name", "school", "status", "is_admin"]:
+                    st.session_state.pop(k, None)
+                st.rerun()
+
+            st.markdown("---")
+            st.markdown("### Administração")
+            admin_pwd = st.text_input("Senha do Administrador", type="password", key="admin_pwd")
+
+            if st.button("Entrar como Admin"):
+                if "ADMIN_PASSWORD" not in st.secrets:
+                    st.error("ADMIN_PASSWORD não configurada nos Secrets.")
+                elif admin_pwd == st.secrets["ADMIN_PASSWORD"]:
+                    st.session_state["is_admin"] = True
+                    st.success("Sessão de Administrador activa.")
+                else:
+                    st.error("Senha inválida.")
+
+            if st.session_state.get("is_admin"):
+                if st.button("Sair do Admin"):
+                    st.session_state["is_admin"] = False
+                    st.session_state.pop("admin_pwd", None)
+                    st.rerun()
+
+            st.markdown("---")
+            st.markdown("### Ajuda / Suporte")
+            admin_whatsapp = "258867926665"
+            msg = "Saudações. Preciso de apoio no sistema de planos (SDEJT)."
+            link_zap = f"https://wa.me/{admin_whatsapp}?text={msg.replace(' ', '%20')}"
+            st.markdown(
+                f"""
+<a href="{link_zap}" target="_blank" style="text-decoration:none;">
+  <button style="background-color:#25D366;color:white;border:none;padding:12px 16px;border-radius:8px;width:100%;cursor:pointer;font-size:15px;font-weight:bold;">
+    📱 Falar com o Administrador no WhatsApp
+  </button>
+</a>
+""",
+                unsafe_allow_html=True,
+            )
+
+        return {
+            "user_key": user_key,
+            "name": user.get("name", ""),
+            "school": user.get("school", ""),
+            "status": status,
+            "is_admin": is_admin_session(),
+        }
+
+    # não logado
     with st.sidebar:
         st.markdown("### Administração")
         admin_pwd = st.text_input("Senha do Administrador", type="password", key="admin_pwd")
@@ -476,66 +659,73 @@ def access_gate() -> dict:
     st.markdown("##### Serviço Distrital de Educação, Juventude e Tecnologia - Inhassoro")
     st.divider()
 
-    col1, col2 = st.columns([1.2, 0.8])
+    tabs = st.tabs(["🆕 Primeiro Registo", "🔐 Entrar"])
 
-    with col1:
-        st.info("👤 Identificação do Professor (obrigatório)")
-        name = st.text_input("Nome do Professor").strip()
-        school = st.text_input("Escola onde lecciona").strip()
+    with tabs[0]:
+        st.info("Primeira vez no sistema: introduza Nome, Escola e crie um PIN.")
+        name = st.text_input("Nome do Professor", key="reg_name").strip()
+        school_input = st.text_input("Escola (ex.: EP de Inhassoro)", key="reg_school").strip()
+        pin1 = st.text_input("Criar PIN", type="password", key="reg_pin1").strip()
+        pin2 = st.text_input("Confirmar PIN", type="password", key="reg_pin2").strip()
 
-        if not name or not school:
-            st.warning("Introduza o seu nome e a escola onde lecciona para continuar.")
-            st.stop()
+        if st.button("✅ Registar e Entrar", type="primary", key="btn_register"):
+            if not name or not school_input or not pin1 or not pin2:
+                st.error("Preencha Nome, Escola e PIN.")
+                st.stop()
+            if len(pin1) < 4:
+                st.error("PIN muito curto. Use pelo menos 4 dígitos/caracteres.")
+                st.stop()
+            if pin1 != pin2:
+                st.error("Os PINs não coincidem.")
+                st.stop()
 
-        user_key = make_user_key(name, school)
-        user = get_user(user_key)
+            school_official = validate_school_and_get_official(school_input)
+            if not school_official:
+                st.error("Escola não registada no sistema. Verifique o nome da escola (ou contacte o SDEJT).")
+                st.stop()
 
-        if user is None:
-            upsert_user(user_key, name, school, "trial")
+            ok, user_key, err = create_user_first_time(name, school_official, pin1)
+            if not ok:
+                st.error(err)
+                st.stop()
+
             user = get_user(user_key)
+            if not user:
+                st.error("Falha ao criar utilizador. Tente novamente.")
+                st.stop()
 
-        status = user["status"]
+            st.session_state["logged_in"] = True
+            st.session_state["user_key"] = user_key
+            st.session_state["name"] = user.get("name", "")
+            st.session_state["school"] = user.get("school", "")
+            st.session_state["status"] = user.get("status", "trial")
+            st.success("Registo concluído. Sessão iniciada.")
+            st.rerun()
 
-        if is_admin_session():
-            if status != "admin":
-                upsert_user(user_key, name, school, "admin")
-                status = "admin"
+    with tabs[1]:
+        st.info("Entradas seguintes: introduza Nome e PIN.")
+        name = st.text_input("Nome do Professor", key="login_name").strip()
+        pin = st.text_input("PIN", type="password", key="login_pin").strip()
 
-        if is_blocked(status):
-            st.error("O seu acesso está bloqueado. Contacte o Administrador.")
-            st.stop()
+        if st.button("🔓 Entrar", type="primary", key="btn_login"):
+            if not name or not pin:
+                st.error("Preencha Nome e PIN.")
+                st.stop()
 
-        limit = get_daily_limit(user_key)
-        used = get_today_count(user_key)
+            ok, u, err = login_with_name_pin(name, pin)
+            if not ok:
+                st.error(err)
+                st.stop()
 
-        if status == "trial":
-            st.success(f"Acesso de teste activo. Hoje: **{used}/{limit}** planos.")
-        elif status == "pending":
-            st.warning("Pedido de acesso total em análise.")
-            st.info(f"Hoje: **{used}/{limit}** planos.")
-        else:
-            st.success("Acesso total activo (ilimitado).")
+            st.session_state["logged_in"] = True
+            st.session_state["user_key"] = u["user_key"]
+            st.session_state["name"] = u.get("name", "")
+            st.session_state["school"] = u.get("school", "")
+            st.session_state["status"] = u.get("status", "trial")
+            st.success("Sessão iniciada.")
+            st.rerun()
 
-        if status in ("trial", "pending"):
-            st.markdown("### Acesso Total")
-            st.write("Para ter acesso total e ilimitado, envie o pedido ao Administrador.")
-            if st.button("📝 Solicitar Acesso Total", type="primary"):
-                res = create_access_request(user_key, name, school)
-                if res == "blocked":
-                    st.error("O seu acesso está bloqueado. Não é possível submeter pedido.")
-                elif res == "already_approved":
-                    st.info("Já tem acesso total.")
-                else:
-                    st.success("Pedido enviado.")
-                st.rerun()
-
-    with col2:
-        st.warning("ℹ️ Ajuda")
-        st.write("O limite diário pode ser ajustado pelo Administrador.")
-        st.write("Depois de aprovado, o acesso é ilimitado.")
-        st.write("Guarde PDFs no histórico para baixar novamente.")
-
-    return {"user_key": user_key, "name": name, "school": school, "status": status, "is_admin": is_admin_session()}
+    st.stop()
 
 
 # =========================
@@ -992,6 +1182,9 @@ if "GOOGLE_API_KEY" not in st.secrets:
     st.stop()
 if "ADMIN_PASSWORD" not in st.secrets:
     st.error("Configure ADMIN_PASSWORD nos Secrets.")
+    st.stop()
+if "PIN_PEPPER" not in st.secrets:
+    st.error("Configure PIN_PEPPER nos Secrets.")
     st.stop()
 
 access = access_gate()
