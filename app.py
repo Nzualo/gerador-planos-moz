@@ -26,17 +26,16 @@ if missing:
     st.error(f"Faltam Secrets: {', '.join(missing)}")
     st.stop()
 
-# 1) Autenticação
+# Login (se não estiver logado, pára aqui)
 auth_gate()
 
-# 2) User da sessão
 user = st.session_state.get("user")
 if not user:
     st.error("Sessão inválida. Faça login novamente.")
     st.stop()
 
 # Header
-st.markdown("## MZ SDEJT - Elaboração de Planos")
+st.markdown("## 🇲🇿 SDEJT - Elaboração de Planos")
 st.caption(
     f"Professor: {user.get('name','-')} | "
     f"Escola: {user.get('school','-')} | "
@@ -44,7 +43,7 @@ st.caption(
 )
 st.divider()
 
-# Botão de sair (opcional, mas recomendado)
+# Sair
 with st.sidebar:
     if st.button("🚪 Sair"):
         st.session_state.pop("logged_in", None)
@@ -52,7 +51,7 @@ with st.sidebar:
         st.session_state.pop("is_admin", None)
         st.rerun()
 
-# 3) Abas principais
+# Abas principais
 tab_planos, tab_admin = st.tabs(["📘 Planos", "🛠️ Admin"])
 
 with tab_planos:
@@ -61,12 +60,11 @@ with tab_planos:
 with tab_admin:
     st.subheader("🛠️ Administração")
 
-    # Se já está admin, mostra painel + botão sair do admin
     if st.session_state.get("is_admin"):
-        col1, col2 = st.columns([1, 1])
-        with col1:
+        c1, c2 = st.columns([1, 1])
+        with c1:
             st.success("Sessão de administrador activa.")
-        with col2:
+        with c2:
             if st.button("Sair do Admin"):
                 st.session_state["is_admin"] = False
                 st.rerun()
@@ -76,7 +74,6 @@ with tab_admin:
     else:
         st.info("Introduza a senha do Administrador para aceder ao painel.")
         admin_pwd = st.text_input("Senha do Administrador", type="password")
-
         if st.button("Entrar como Admin", type="primary"):
             if admin_pwd == st.secrets["ADMIN_PASSWORD"]:
                 st.session_state["is_admin"] = True
