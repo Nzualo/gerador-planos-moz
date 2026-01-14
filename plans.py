@@ -18,20 +18,11 @@ BUCKET_PLANS = "plans"
 TABLE_COLS = ["Tempo", "Função Didáctica", "Actividade do Professor", "Actividade do Aluno", "Métodos", "Meios"]
 
 
-# =========================
-# MODELO DE PLANO
-# =========================
 class PlanoAula(BaseModel):
     objetivo_geral: str | list[str]
     objetivos_especificos: list[str] = Field(min_length=1)
     tabela: list[conlist(str, min_length=6, max_length=6)]
 
-
-# =========================
-# HELPERS
-# =========================
-def today_iso() -> str:
-    return date.today().isoformat()
 
 def safe_extract_json(text: str) -> dict:
     text = (text or "").strip()
@@ -44,9 +35,11 @@ def safe_extract_json(text: str) -> dict:
             return json.loads(text[start:end + 1])
         raise
 
+
 def make_cache_key(payload: dict) -> str:
     raw = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
+
 
 @st.cache_data(ttl=86400)
 def cached_generate(cache_key: str, prompt: str, model_name: str) -> str:
@@ -55,9 +48,7 @@ def cached_generate(cache_key: str, prompt: str, model_name: str) -> str:
     return resp.text
 
 
-# =========================
-# CURRÍCULO (SNIPPETS)
-# =========================
+# -------- currículo (snippets)
 def list_curriculum_snippets(disciplina: str, classe: str) -> pd.DataFrame:
     sb = supa()
     r = (
@@ -69,6 +60,7 @@ def list_curriculum_snippets(disciplina: str, classe: str) -> pd.DataFrame:
         .execute()
     )
     return pd.DataFrame(r.data or [])
+
 
 def get_curriculum_context(disciplina: str, classe: str, unidade: str, tema: str) -> str:
     df = list_curriculum_snippets(disciplina, classe)
@@ -98,12 +90,11 @@ def get_curriculum_context(disciplina: str, classe: str, unidade: str, tema: str
     return "\n".join([f"- {p}" for p in picks])
 
 
-# =========================
-# REGRAS / ENFORCERS
-# =========================
+# -------- enforcers
 def contains_any(text: str, terms: list[str]) -> bool:
     t = (text or "").lower()
     return any(term.lower() in t for term in terms)
+
 
 def is_1a_6a(classe: str) -> bool:
     try:
@@ -111,6 +102,7 @@ def is_1a_6a(classe: str) -> bool:
         return 1 <= n <= 6
     except Exception:
         return False
+
 
 def enforce_didactic_rules(plano: PlanoAula) -> PlanoAula:
     if not plano.tabela:
@@ -157,6 +149,7 @@ def enforce_didactic_rules(plano: PlanoAula) -> PlanoAula:
 
     return plano
 
+
 def enforce_livro_aluno_meios(plano: PlanoAula, ctx: dict) -> PlanoAula:
     if not plano.tabela:
         return plano
@@ -172,15 +165,14 @@ def enforce_livro_aluno_meios(plano: PlanoAula, ctx: dict) -> PlanoAula:
         plano.tabela[i] = [row[0], row[1], row[2], row[3], row[4], meios]
     return plano
 
+
 def apply_all_enforcers(plano: PlanoAula, ctx: dict) -> PlanoAula:
     plano = enforce_didactic_rules(plano)
     plano = enforce_livro_aluno_meios(plano, ctx)
     return plano
 
 
-# =========================
-# PROMPT
-# =========================
+# -------- prompt
 def build_prompt(ctx: dict, curriculum_text: str) -> str:
     return f"""
 És Pedagogo(a) Especialista do Sistema Nacional de Educação (SNE) de Moçambique.
@@ -242,9 +234,7 @@ FORMATO JSON:
 """.strip()
 
 
-# =========================
-# HISTÓRICO (DB + STORAGE)
-# =========================
+# -------- histórico (DB + Storage)
 def list_user_plans(user_key: str) -> pd.DataFrame:
     sb = supa()
     r = (
@@ -260,6 +250,7 @@ def list_user_plans(user_key: str) -> pd.DataFrame:
     df["created_at"] = pd.to_datetime(df["created_at"], errors="coerce")
     df["plan_day"] = pd.to_datetime(df["plan_day"], errors="coerce").dt.date
     return df
+
 
 def save_plan_to_history_storage(user_key: str, ctx: dict, plano_dict: dict, pdf_bytes: bytes):
     sb = supa()
@@ -282,13 +273,14 @@ def save_plan_to_history_storage(user_key: str, ctx: dict, plano_dict: dict, pdf
     safe_classe = ctx.get("classe", "").replace(" ", "_")
     path = f"{user_key}/{plan_day_iso}/{plan_id}_{safe_classe}.pdf"
 
-    sb.storage.from_(BUCKET_PLANS).upload(
+    sb.storage.from_("plans").upload(
         path=path,
         file=pdf_bytes,
         file_options={"content-type": "application/pdf", "upsert": "true"},
     )
 
     sb.table("user_plans").update({"pdf_path": path}).eq("id", plan_id).eq("user_key", user_key).execute()
+
 
 def get_plan_pdf_bytes(user_key: str, plan_id: int) -> bytes | None:
     sb = supa()
@@ -307,7 +299,7 @@ def get_plan_pdf_bytes(user_key: str, plan_id: int) -> bytes | None:
     pdf_b64 = r.data[0].get("pdf_b64")
 
     if pdf_path:
-        signed = sb.storage.from_(BUCKET_PLANS).create_signed_url(pdf_path, 600)
+        signed = sb.storage.from_("plans").create_signed_url(pdf_path, 600)
         url = signed.get("signedURL") or signed.get("signedUrl") or signed.get("signed_url")
         if url:
             resp = requests.get(url, timeout=60)
@@ -323,9 +315,7 @@ def get_plan_pdf_bytes(user_key: str, plan_id: int) -> bytes | None:
     return None
 
 
-# =========================
-# PREVIEW IMAGENS (opcional)
-# =========================
+# -------- preview imagens
 def wrap_text(draw, text, font, max_width):
     words = (text or "").split()
     lines, line = [], ""
@@ -340,6 +330,7 @@ def wrap_text(draw, text, font, max_width):
     if line:
         lines.append(line)
     return lines
+
 
 def plano_to_preview_images(ctx: dict, plano: PlanoAula) -> list[Image.Image]:
     W, H = 1240, 1754
@@ -450,9 +441,7 @@ def plano_to_preview_images(ctx: dict, plano: PlanoAula) -> list[Image.Image]:
     return imgs
 
 
-# =========================
-# PDF
-# =========================
+# -------- PDF
 def clean_text(text) -> str:
     if text is None:
         return "-"
@@ -460,6 +449,7 @@ def clean_text(text) -> str:
     for k, v in {"–": "-", "—": "-", "“": '"', "”": '"', "‘": "'", "’": "'", "…": "...", "•": "-"}.items():
         t = t.replace(k, v)
     return " ".join(t.replace("\r", " ").replace("\n", " ").split())
+
 
 class PDF(FPDF):
     def header(self):
@@ -517,6 +507,7 @@ class PDF(FPDF):
 
         self.set_y(y0 + height)
 
+
 def create_pdf(ctx: dict, plano: PlanoAula) -> bytes:
     pdf = PDF()
     pdf.set_auto_page_break(auto=False)
@@ -566,23 +557,16 @@ def create_pdf(ctx: dict, plano: PlanoAula) -> bytes:
     return pdf.output(dest="S").encode("latin-1", "replace")
 
 
-# =========================
-# UI PRINCIPAL (PROFESSOR)
-# =========================
+# -------- UI final (Planos)
 def plans_ui(user: dict):
-    st.title("🇲🇿 Elaboração de Planos de Aulas (SNE)")
-    st.caption("Serviço Distrital de Educação, Juventude e Tecnologia - Inhassoro")
-
     user_key = user["user_key"]
     user_name = user.get("name", "")
     user_school = user.get("school", "")
     user_status = user.get("status", "trial")
 
-    # ---------- Histórico do professor ----------
-    st.divider()
     st.subheader("📚 Meus Planos (Histórico)")
-
     hist = list_user_plans(user_key)
+
     if hist.empty:
         st.info("Ainda não há planos guardados no seu histórico.")
     else:
@@ -611,7 +595,7 @@ def plans_ui(user: dict):
 
         st.dataframe(dfh[["plan_day","classe","disciplina","tema","unidade","turma","created_at"]], hide_index=True, use_container_width=True)
 
-        sel = st.selectbox("Seleccionar um plano para baixar novamente", dfh["label"].tolist())
+        sel = st.selectbox("Selecionar um plano para baixar novamente", dfh["label"].tolist())
         plan_id = int(dfh[dfh["label"] == sel].iloc[0]["id"])
         pdf_bytes_hist = get_plan_pdf_bytes(user_key, plan_id)
 
@@ -626,12 +610,10 @@ def plans_ui(user: dict):
         else:
             st.error("Não foi possível carregar o PDF deste plano.")
 
-    # ---------- Formulário ----------
     st.divider()
     st.subheader("🧩 Novo Plano")
 
     with st.sidebar:
-        st.markdown("---")
         st.markdown("### Contexto da Escola (Inhassoro)")
         localidade = st.text_input("Posto/Localidade", "Inhassoro (Sede)")
         tipo_escola = st.selectbox("Tipo de escola", ["EP", "EB", "ES1", "ES2", "Outra"])
@@ -667,16 +649,11 @@ def plans_ui(user: dict):
     if missing:
         st.warning(f"Preencha: {', '.join(missing)}")
 
-    # ---------- Gerar ----------
     if st.button("🚀 Gerar Plano de Aula", type="primary", disabled=bool(missing)):
-        if "GOOGLE_API_KEY" not in st.secrets:
-            st.error("Configure GOOGLE_API_KEY nos Secrets.")
-            st.stop()
+        genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 
         with st.spinner("A processar o plano com Inteligência Artificial..."):
             try:
-                genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-
                 ctx = {
                     "localidade": localidade.strip(),
                     "tipo_escola": tipo_escola,
@@ -726,7 +703,6 @@ def plans_ui(user: dict):
             except Exception as e:
                 st.error(f"Ocorreu um erro no sistema: {e}")
 
-    # ---------- Resultado + edição + export ----------
     if st.session_state.get("plano_pronto"):
         st.divider()
         st.subheader("✅ Plano Gerado com Sucesso")
@@ -757,7 +733,6 @@ def plans_ui(user: dict):
                     objetivo_geral = og_lines[0] if og_lines else "-"
                 oe_lines = [x.strip() for x in oe_new.split("\n") if x.strip()] or ["-"]
 
-                # montar plano novo
                 rows = []
                 for _, r in edited_df.iterrows():
                     row = [str(r.get(c, "") if r.get(c, "") is not None else "").strip() for c in TABLE_COLS]
