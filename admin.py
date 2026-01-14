@@ -1,3 +1,4 @@
+st.sidebar.success(f"Administrador: {admin_name}")
 import streamlit as st
 import pandas as pd
 from datetime import date, datetime, timedelta
