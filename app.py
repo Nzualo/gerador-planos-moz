@@ -26,7 +26,7 @@ if missing:
     st.error(f"Faltam Secrets: {', '.join(missing)}")
     st.stop()
 
-# Login (se não estiver logado, pára aqui)
+# Login
 auth_gate()
 
 user = st.session_state.get("user")
@@ -51,7 +51,7 @@ with st.sidebar:
         st.session_state.pop("is_admin", None)
         st.rerun()
 
-# Abas principais
+# Abas
 tab_planos, tab_admin = st.tabs(["📘 Planos", "🛠️ Admin"])
 
 with tab_planos:
