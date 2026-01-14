@@ -4,9 +4,7 @@ from datetime import date, datetime, timedelta
 
 from utils import supa, pin_hash
 
-# ---------------------------
-# Helpers DB
-# ---------------------------
+
 def list_users_df() -> pd.DataFrame:
     sb = supa()
     r = (
@@ -22,6 +20,7 @@ def list_users_df() -> pd.DataFrame:
         df["daily_limit"] = 2
     return df
 
+
 def set_user_status(user_key: str, status: str, approved_by: str | None = None):
     sb = supa()
     payload = {"status": status}
@@ -35,17 +34,21 @@ def set_user_status(user_key: str, status: str, approved_by: str | None = None):
 
     sb.table("app_users").update(payload).eq("user_key", user_key).execute()
 
+
 def set_daily_limit(user_key: str, daily_limit: int):
     sb = supa()
     sb.table("app_users").update({"daily_limit": int(daily_limit)}).eq("user_key", user_key).execute()
+
 
 def reset_pin(user_key: str, new_pin: str):
     sb = supa()
     sb.table("app_users").update({"pin_hash": pin_hash(new_pin)}).eq("user_key", user_key).execute()
 
+
 def delete_user(user_key: str):
     sb = supa()
     sb.table("app_users").delete().eq("user_key", user_key).execute()
+
 
 def list_plans_all_df(days_back: int = 30) -> pd.DataFrame:
     sb = supa()
@@ -64,6 +67,7 @@ def list_plans_all_df(days_back: int = 30) -> pd.DataFrame:
     df["plan_day"] = pd.to_datetime(df["plan_day"], errors="coerce").dt.date
     return df
 
+
 def usage_daily_df(days_back: int = 30) -> pd.DataFrame:
     sb = supa()
     since = (date.today() - timedelta(days=days_back)).isoformat()
@@ -80,6 +84,7 @@ def usage_daily_df(days_back: int = 30) -> pd.DataFrame:
     df["count"] = pd.to_numeric(df["count"], errors="coerce").fillna(0).astype(int)
     return df
 
+
 def list_access_requests_df(status: str = "pending") -> pd.DataFrame:
     sb = supa()
     r = (
@@ -91,6 +96,7 @@ def list_access_requests_df(status: str = "pending") -> pd.DataFrame:
     )
     return pd.DataFrame(r.data or [])
 
+
 def approve_request(req_id: int, user_key: str, admin_name: str):
     sb = supa()
     sb.table("access_requests").update({
@@ -99,6 +105,7 @@ def approve_request(req_id: int, user_key: str, admin_name: str):
         "processed_by": admin_name
     }).eq("id", req_id).execute()
     set_user_status(user_key, "approved", approved_by=admin_name)
+
 
 def reject_request(req_id: int, user_key: str, admin_name: str):
     sb = supa()
@@ -110,28 +117,21 @@ def reject_request(req_id: int, user_key: str, admin_name: str):
     set_user_status(user_key, "trial")
 
 
-# ---------------------------
-# Admin UI
-# ---------------------------
 def admin_panel(admin_name: str = "Admin"):
-    with st.sidebar:
-        st.markdown("### 🛠️ Administração")
-        st.success(f"Administrador: {admin_name}")
-
     tabs = st.tabs(["📊 Dashboard", "👥 Utilizadores", "📩 Pedidos", "📚 Planos (Todos)"])
 
-    # ---------------- Dashboard ----------------
+    # Dashboard
     with tabs[0]:
         st.subheader("📊 Dashboard SDEJT")
+        days_back = st.selectbox("Janela (dias)", [7, 14, 30, 60, 90], index=2, key="adm_days")
 
-        days_back = st.selectbox("Janela (dias)", [7, 14, 30, 60, 90], index=2)
         users = list_users_df()
         usage = usage_daily_df(days_back=days_back)
         plans = list_plans_all_df(days_back=days_back)
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Professores registados", len(users) if not users.empty else 0)
-        c2.metric("Planos gerados (janela)", len(plans) if not plans.empty else 0)
+        c2.metric("Planos (janela)", len(plans) if not plans.empty else 0)
         c3.metric("Planos hoje", int(plans[plans["plan_day"] == date.today()].shape[0]) if not plans.empty else 0)
         c4.metric("Uso hoje (contagem)", int(usage[usage["day"] == date.today()]["count"].sum()) if not usage.empty else 0)
 
@@ -146,18 +146,16 @@ def admin_panel(admin_name: str = "Admin"):
 
             by_school = p.groupby("school", as_index=False).size().rename(columns={"size":"planos"})
             by_school = by_school.sort_values("planos", ascending=False)
-
             st.dataframe(by_school, use_container_width=True, hide_index=True)
 
-            st.subheader("📌 Top Professores (planos na janela)")
+            st.subheader("📌 Top Professores (janela)")
             by_prof = p.groupby(["name","school"], as_index=False).size().rename(columns={"size":"planos"})
             by_prof = by_prof.sort_values("planos", ascending=False).head(20)
             st.dataframe(by_prof, use_container_width=True, hide_index=True)
 
-    # ---------------- Utilizadores ----------------
+    # Utilizadores
     with tabs[1]:
         st.subheader("👥 Gestão de Utilizadores")
-
         users = list_users_df()
         if users.empty:
             st.info("Sem utilizadores.")
@@ -166,7 +164,7 @@ def admin_panel(admin_name: str = "Admin"):
 
             users = users.copy()
             users["label"] = users["name"].astype(str) + " — " + users["school"].astype(str) + " (" + users["status"].astype(str) + ")"
-            sel = st.selectbox("Selecionar utilizador", users["label"].tolist())
+            sel = st.selectbox("Selecionar utilizador", users["label"].tolist(), key="adm_user_sel")
             row = users[users["label"] == sel].iloc[0]
             user_key = row["user_key"]
 
@@ -174,85 +172,83 @@ def admin_panel(admin_name: str = "Admin"):
             colA, colB, colC = st.columns(3)
 
             with colA:
-                if st.button("✅ Aprovar"):
+                if st.button("✅ Aprovar", key="adm_appr"):
                     set_user_status(user_key, "approved", approved_by=admin_name)
                     st.success("Aprovado.")
                     st.rerun()
-                if st.button("↩️ Revogar (Trial)"):
+                if st.button("↩️ Revogar (Trial)", key="adm_revoke"):
                     set_user_status(user_key, "trial")
                     st.success("Revogado.")
                     st.rerun()
 
             with colB:
-                if st.button("⛔ Bloquear"):
+                if st.button("⛔ Bloquear", key="adm_block"):
                     set_user_status(user_key, "blocked")
                     st.success("Bloqueado.")
                     st.rerun()
-                if st.button("✅ Desbloquear (Trial)"):
+                if st.button("✅ Desbloquear (Trial)", key="adm_unblock"):
                     set_user_status(user_key, "trial")
                     st.success("Desbloqueado.")
                     st.rerun()
 
             with colC:
-                new_limit = st.number_input("Limite diário (trial/pending)", min_value=0, max_value=20, value=int(row.get("daily_limit", 2) or 2), step=1)
-                if st.button("💾 Guardar limite"):
+                new_limit = st.number_input("Limite diário (trial/pending)", min_value=0, max_value=20,
+                                            value=int(row.get("daily_limit", 2) or 2), step=1, key="adm_limit")
+                if st.button("💾 Guardar limite", key="adm_save_limit"):
                     set_daily_limit(user_key, int(new_limit))
                     st.success("Limite actualizado.")
                     st.rerun()
 
             st.markdown("---")
             st.subheader("🔐 Redefinir PIN (Admin)")
-            new_pin = st.text_input("Novo PIN temporário", type="password", help="Dê um PIN simples ao professor, ele pode mudar depois.")
-            if st.button("🔁 Redefinir PIN"):
-                if not new_pin or len(new_pin) < 4:
+            new_pin = st.text_input("Novo PIN temporário (mín. 4)", type="password", key="adm_newpin")
+            if st.button("🔁 Redefinir PIN", key="adm_resetpin"):
+                if not new_pin or len(new_pin.strip()) < 4:
                     st.error("PIN inválido. Use pelo menos 4 caracteres.")
                 else:
-                    reset_pin(user_key, new_pin)
+                    reset_pin(user_key, new_pin.strip())
                     st.success("PIN redefinido com sucesso.")
 
             st.markdown("---")
             st.subheader("🗑️ Apagar Utilizador (irreversível)")
-            confirm = st.checkbox("Confirmo que quero apagar este utilizador (irreversível).")
-            if st.button("Apagar utilizador", disabled=not confirm):
+            confirm = st.checkbox("Confirmo que quero apagar este utilizador (irreversível).", key="adm_del_chk")
+            if st.button("Apagar utilizador", disabled=not confirm, key="adm_del_btn"):
                 delete_user(user_key)
                 st.success("Utilizador apagado.")
                 st.rerun()
 
-    # ---------------- Pedidos ----------------
+    # Pedidos
     with tabs[2]:
         st.subheader("📩 Pedidos de Acesso")
-
         pending = list_access_requests_df("pending")
         if pending.empty:
             st.info("Sem pedidos pendentes.")
         else:
             pending = pending.copy()
             pending["label"] = pending["name"].astype(str) + " — " + pending["school"].astype(str) + " (ID " + pending["id"].astype(str) + ")"
-
             st.dataframe(pending[["id","name","school","created_at"]], use_container_width=True, hide_index=True)
 
-            sel = st.selectbox("Selecionar pedido", pending["label"].tolist())
+            sel = st.selectbox("Selecionar pedido", pending["label"].tolist(), key="adm_req_sel")
             row = pending[pending["label"] == sel].iloc[0]
-
             req_id = int(row["id"])
             user_key = row["user_key"]
 
             c1, c2 = st.columns(2)
             with c1:
-                if st.button("✅ Aprovar pedido", type="primary"):
+                if st.button("✅ Aprovar pedido", type="primary", key="adm_req_appr"):
                     approve_request(req_id, user_key, admin_name)
                     st.success("Pedido aprovado.")
                     st.rerun()
             with c2:
-                if st.button("❌ Rejeitar pedido"):
+                if st.button("❌ Rejeitar pedido", key="adm_req_rej"):
                     reject_request(req_id, user_key, admin_name)
                     st.success("Pedido rejeitado.")
                     st.rerun()
 
-    # ---------------- Planos (Todos) ----------------
+    # Planos (Todos)
     with tabs[3]:
         st.subheader("📚 Planos (Todos)")
-        days_back = st.selectbox("Mostrar últimos (dias)", [7, 14, 30, 60, 90, 180], index=2, key="plans_days_back")
+        days_back = st.selectbox("Mostrar últimos (dias)", [7, 14, 30, 60, 90, 180], index=2, key="adm_pl_days")
 
         plans = list_plans_all_df(days_back=days_back)
         users = list_users_df()
@@ -264,14 +260,13 @@ def admin_panel(admin_name: str = "Admin"):
             if not users.empty:
                 p = p.merge(users[["user_key","name","school"]], on="user_key", how="left")
 
-            # filtros
             f1, f2, f3 = st.columns(3)
             with f1:
-                school_f = st.text_input("Filtrar escola (contém)", "")
+                school_f = st.text_input("Filtrar escola (contém)", "", key="adm_f_school")
             with f2:
-                disc_f = st.text_input("Filtrar disciplina (contém)", "")
+                disc_f = st.text_input("Filtrar disciplina (contém)", "", key="adm_f_disc")
             with f3:
-                classe_f = st.text_input("Filtrar classe (contém)", "")
+                classe_f = st.text_input("Filtrar classe (contém)", "", key="adm_f_cl")
 
             if school_f.strip():
                 p = p[p["school"].astype(str).str.lower().str.contains(school_f.strip().lower(), na=False)]
