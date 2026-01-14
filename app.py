@@ -1,4 +1,6 @@
 import streamlit as st
+st.toast("✅ VERSÃO NOVA CARREGADA", icon="✅")
+import streamlit as st
 
 from auth import auth_gate
 from admin import admin_panel
