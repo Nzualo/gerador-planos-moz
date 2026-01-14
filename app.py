@@ -1,83 +1,131 @@
 import streamlit as st
+from datetime import datetime
+from utils import supa, pin_hash, make_user_key, normalize_text
 
-from auth import auth_gate
-from admin import admin_panel
-from plans import plans_ui
 
-# UI base
-st.set_page_config(page_title="SDEJT - Planos SNE", page_icon="🇲🇿", layout="wide")
+@st.cache_data(ttl=3600)
+def load_schools_map():
+    sb = supa()
+    r = sb.table("schools").select("name,name_norm").eq("active", True).execute()
+    rows = r.data or []
+    return {row["name_norm"]: row["name"] for row in rows}
 
-st.markdown(
-    """
-<style>
-    .stApp { background-color: #0E1117; color: #FAFAFA; }
-    [data-testid="stSidebar"] { background-color: #262730; }
-    .stTextInput > div > div > input, .stSelectbox > div > div > div, .stTextArea textarea { color: #ffffff; }
-    h1, h2, h3 { color: #FF4B4B !important; }
-</style>
-""",
-    unsafe_allow_html=True,
-)
 
-# Secrets essenciais
-required = ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "PIN_PEPPER", "ADMIN_PASSWORD", "GOOGLE_API_KEY"]
-missing = [k for k in required if k not in st.secrets]
-if missing:
-    st.error(f"Faltam Secrets: {', '.join(missing)}")
-    st.stop()
+def normalize_school_name(s: str) -> str:
+    s = normalize_text(s)
 
-# Login
-auth_gate()
+    # abreviações aceites
+    s = s.replace("escola primaria", "ep")
+    s = s.replace("escola basica", "eb")
+    s = s.replace("escola secundaria", "es")
+    s = s.replace("instituto", "ii")
+    s = s.replace("servico distrital", "sdejt")
 
-user = st.session_state.get("user")
-if not user:
-    st.error("Sessão inválida. Faça login novamente.")
-    st.stop()
+    # atalho
+    if s == "sdejt":
+        s = "sdejt de inhassoro"
 
-# Header
-st.markdown("## 🇲🇿 SDEJT - Elaboração de Planos")
-st.caption(
-    f"Professor: {user.get('name','-')} | "
-    f"Escola: {user.get('school','-')} | "
-    f"Estado: {user.get('status','trial')}"
-)
-st.divider()
+    return s
 
-# Sair
-with st.sidebar:
-    if st.button("🚪 Sair"):
-        st.session_state.pop("logged_in", None)
-        st.session_state.pop("user", None)
-        st.session_state.pop("is_admin", None)
-        st.rerun()
 
-# Abas
-tab_planos, tab_admin = st.tabs(["📘 Planos", "🛠️ Admin"])
+def get_official_school(school_input: str) -> str | None:
+    schools = load_schools_map()
+    key = normalize_school_name(school_input)
+    return schools.get(key)
 
-with tab_planos:
-    plans_ui(user)
 
-with tab_admin:
-    st.subheader("🛠️ Administração")
+def get_user_by_key(user_key: str):
+    sb = supa()
+    r = sb.table("app_users").select("*").eq("user_key", user_key).limit(1).execute()
+    return r.data[0] if r.data else None
 
-    if st.session_state.get("is_admin"):
-        c1, c2 = st.columns([1, 1])
-        with c1:
-            st.success("Sessão de administrador activa.")
-        with c2:
-            if st.button("Sair do Admin"):
-                st.session_state["is_admin"] = False
-                st.rerun()
 
-        admin_panel(admin_name=user.get("name", "Admin"))
+def create_user(name: str, school: str, pin: str):
+    user_key = make_user_key(name, school)
+    sb = supa()
 
-    else:
-        st.info("Introduza a senha do Administrador para aceder ao painel.")
-        admin_pwd = st.text_input("Senha do Administrador", type="password")
-        if st.button("Entrar como Admin", type="primary"):
-            if admin_pwd == st.secrets["ADMIN_PASSWORD"]:
-                st.session_state["is_admin"] = True
-                st.success("Entrou como Admin.")
-                st.rerun()
-            else:
-                st.error("Senha inválida.")
+    exists = sb.table("app_users").select("user_key").eq("user_key", user_key).limit(1).execute()
+    if exists.data:
+        return False, "Utilizador já existe. Use Entrar."
+
+    sb.table("app_users").insert({
+        "user_key": user_key,
+        "name": name.strip(),
+        "school": school.strip(),
+        "pin_hash": pin_hash(pin),
+        "status": "trial",
+        "created_at": datetime.now().isoformat()
+    }).execute()
+
+    return True, user_key
+
+
+def login_user(name: str, pin: str):
+    sb = supa()
+    r = sb.table("app_users").select("*").eq("name", name.strip()).execute()
+    users = r.data or []
+
+    if not users:
+        return False, "Utilizador não encontrado."
+
+    ph = pin_hash(pin)
+    for u in users:
+        if u.get("pin_hash") == ph:
+            return True, u
+
+    return False, "PIN inválido."
+
+
+def auth_gate():
+    # Já logado
+    if st.session_state.get("logged_in") and st.session_state.get("user"):
+        return
+
+    st.markdown("## 🔐 Acesso ao Sistema")
+
+    tabs = st.tabs(["🆕 Primeiro Registo", "🔐 Entrar"])
+
+    with tabs[0]:
+        name = st.text_input("Nome do Professor", key="reg_name")
+        school = st.text_input("Escola", key="reg_school")
+        pin1 = st.text_input("Criar PIN", type="password", key="reg_pin1")
+        pin2 = st.text_input("Confirmar PIN", type="password", key="reg_pin2")
+
+        if st.button("Registar e Entrar", key="btn_reg"):
+            if not all([name, school, pin1, pin2]):
+                st.error("Preencha todos os campos.")
+                st.stop()
+            if pin1 != pin2:
+                st.error("PINs não coincidem.")
+                st.stop()
+            if len(pin1) < 4:
+                st.error("PIN muito curto (mínimo 4).")
+                st.stop()
+
+            school_official = get_official_school(school)
+            if not school_official:
+                st.error("Escola não registada no sistema. Verifique o nome.")
+                st.stop()
+
+            ok, result = create_user(name, school_official, pin1)
+            if not ok:
+                st.error(result)
+                st.stop()
+
+            st.session_state["logged_in"] = True
+            st.session_state["user"] = get_user_by_key(result)
+            st.rerun()
+
+    with tabs[1]:
+        name = st.text_input("Nome", key="login_name")
+        pin = st.text_input("PIN", type="password", key="login_pin")
+
+        if st.button("Entrar", key="btn_login"):
+            ok, result = login_user(name, pin)
+            if not ok:
+                st.error(result)
+                st.stop()
+
+            st.session_state["logged_in"] = True
+            st.session_state["user"] = result
+            st.rerun()
