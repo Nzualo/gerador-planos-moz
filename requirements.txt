@@ -1,7 +1,6 @@
 streamlit
 supabase
 pandas
-requests
 pydantic
 google-generativeai
 fpdf
