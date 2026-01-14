@@ -1,3 +1,6 @@
+import streamlit as st
+st.toast("VERSÃO NOVA ATIVA ✅", icon="✅")
+
 import base64
 import pandas as pd
 import streamlit as st
