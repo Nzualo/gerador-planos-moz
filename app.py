@@ -6,7 +6,11 @@
 #  - Próximos: Nome + PIN
 # Admin separado (senha própria) na sidebar
 #
-# Geração com IA (Gemini) + PDF (FPDF)
+# Fluxo Professor:
+#  1) Gerar Plano (IA) -> cria RASCUNHO
+#  2) Editar RASCUNHO
+#  3) Guardar -> valida duplicados (mesmo Tema) + PDF + histórico + download
+#
 # Upload opcional: página de livro (imagem/pdf) para enriquecer o plano
 # Admin: filtros por data e escola, download de PDFs
 # =========================================================
@@ -129,6 +133,7 @@ SCHOOLS_RAW = [
     'Instituto Industrial e Comercial "Estrela do Mar" de Inhassoro',
     "Serviço Distrital de Educação, Juventude e Tecnologia de Inhassoro",
 ]
+
 
 # =========================
 # NORMALIZAÇÃO (aceitar EP/Escola Primária etc.)
@@ -274,6 +279,18 @@ def list_plans_all() -> pd.DataFrame:
     return df
 
 
+def plan_already_exists_same_tema(user_key: str, tema: str) -> bool:
+    """Bloqueia repetir planos com o mesmo tema para o mesmo professor."""
+    tema_k = normalize_text(tema)
+    df = list_plans_user(user_key)
+    if df.empty:
+        return False
+    for t in df["tema"].astype(str).tolist():
+        if normalize_text(t) == tema_k:
+            return True
+    return False
+
+
 def save_plan(
     user_key: str,
     ctx: dict,
@@ -297,7 +314,7 @@ def save_plan(
             "duracao": ctx["duracao"],
             "metodos": ctx.get("metodos", ""),
             "meios": ctx.get("meios", ""),
-            "plan_json": plano_json,
+            "plan_json": plano_json,  # aqui também vai "upload_details"
             "pdf_b64": base64.b64encode(pdf_bytes).decode("utf-8"),
             "upload_name": upload_name,
             "upload_b64": upload_b64,
@@ -339,7 +356,6 @@ def safe_extract_json(text: str) -> dict:
 
 
 def build_prompt(ctx: dict, upload_hint: str) -> str:
-    # Se houver upload, só usamos como "pista" (metadados) para enriquecer.
     return f"""
 És Pedagogo(a) Especialista do Sistema Nacional de Educação (SNE) de Moçambique.
 Escreve SEMPRE em Português de Moçambique. Evita termos e ortografia do Brasil.
@@ -361,6 +377,7 @@ DADOS DO PLANO:
 OPCIONAL (se o professor informou):
 - Métodos sugeridos: {ctx.get("metodos") or "-"}
 - Meios/Materiais didácticos sugeridos: {ctx.get("meios") or "-"}
+- Detalhes do ficheiro (se houver): {ctx.get("upload_details") or "-"}
 
 UPLOAD (OPCIONAL):
 {upload_hint if upload_hint else "- (Sem upload)"}
@@ -489,6 +506,8 @@ def create_pdf(ctx: dict, plano: PlanoAula) -> bytes:
         pdf.multi_cell(0, 6, f"Métodos sugeridos: {clean_text(ctx['metodos'])}")
     if ctx.get("meios"):
         pdf.multi_cell(0, 6, f"Meios/Materiais sugeridos: {clean_text(ctx['meios'])}")
+    if ctx.get("upload_details"):
+        pdf.multi_cell(0, 6, f"Detalhes do ficheiro: {clean_text(ctx['upload_details'])}")
 
     pdf.line(10, pdf.get_y() + 2, 200, pdf.get_y() + 2)
     pdf.ln(5)
@@ -522,7 +541,10 @@ def create_pdf(ctx: dict, plano: PlanoAula) -> bytes:
 # SESSION HELPERS
 # =========================
 def logout():
-    for k in ["logged_in", "user_key", "user_name", "user_school", "user_status", "is_admin"]:
+    for k in [
+        "logged_in", "user_key", "user_name", "user_school", "user_status", "is_admin",
+        "draft_ctx", "draft_raw", "draft_model", "draft_upload_meta"
+    ]:
         st.session_state.pop(k, None)
     st.rerun()
 
@@ -698,6 +720,7 @@ def render_user_history():
         df2["classe"].astype(str) + " | " +
         df2["tema"].astype(str)
     )
+
     st.dataframe(
         df2[["plan_day", "disciplina", "classe", "unidade", "tema", "turma", "created_at"]],
         hide_index=True,
@@ -718,12 +741,11 @@ def render_user_history():
 
 
 # =========================
-# PROFESSOR: GERAR COM IA
+# PROFESSOR: GERAR COM IA (RASCUNHO -> EDITAR -> GUARDAR)
 # =========================
 def render_generate():
     st.subheader("🧑‍🏫 Gerar Plano (IA)")
 
-    # CAMPOS OBRIGATÓRIOS
     col1, col2 = st.columns(2)
     with col1:
         disciplina = st.text_input("Disciplina", "Língua Portuguesa")
@@ -734,7 +756,6 @@ def render_generate():
         turma = st.text_input("Turma", "A")
         data_plano = st.date_input("Data do Plano", value=date.today())
 
-    # CAMPOS DIDÁTICOS
     col3, col4 = st.columns(2)
     with col3:
         duracao = st.selectbox("Duração", ["45 Min", "90 Min"])
@@ -743,20 +764,32 @@ def render_generate():
         metodos = st.text_area("Métodos (opcional)", "Ex.: conversação dirigida, trabalho em grupo, demonstração.", height=110)
         meios = st.text_area("Meios/Materiais didácticos (opcional)", "Ex.: quadro, giz/marcador, livro do aluno, cartazes.", height=110)
 
-    # UPLOAD (OPCIONAL)
     st.markdown("### 📎 Upload opcional (Página de livro / imagem / PDF)")
     upload = st.file_uploader("Carregar ficheiro (png/jpg/pdf) - opcional", type=["png","jpg","jpeg","pdf"])
+    upload_details = st.text_area("Detalhes do ficheiro carregado (opcional)", "Ex.: Página 34 - texto sobre vogais; exercícios 1-3.", height=80)
 
-    missing = []
+    # valida obrigatórios
+    missing_fields = []
     if not unidade.strip():
-        missing.append("Unidade Temática")
+        missing_fields.append("Unidade Temática")
     if not tema.strip():
-        missing.append("Tema")
+        missing_fields.append("Tema")
 
-    if missing:
-        st.warning("Preencha: " + ", ".join(missing))
+    if missing_fields:
+        st.warning("Preencha: " + ", ".join(missing_fields))
 
-    if st.button("🚀 Gerar Plano com IA e Guardar", type="primary", disabled=bool(missing)):
+    # bloquear repetição ANTES de gerar (opcional, mas ajuda)
+    if tema.strip() and plan_already_exists_same_tema(user_key, tema.strip()):
+        st.error("⚠️ Já existe um plano guardado com este mesmo Tema para este professor. Use outro tema ou edite o plano existente.")
+        # ainda assim podes gerar rascunho se quiseres? aqui eu bloqueio para não perder tempo:
+        block_generate = True
+    else:
+        block_generate = False
+
+    # -------------------------
+    # 1) GERAR RASCUNHO
+    # -------------------------
+    if st.button("🚀 Gerar Plano", type="primary", disabled=bool(missing_fields) or block_generate):
         with st.spinner("A gerar o plano com IA..."):
             try:
                 genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
@@ -785,6 +818,7 @@ def render_generate():
                     "tipo_aula": tipo_aula,
                     "metodos": metodos.strip(),
                     "meios": meios.strip(),
+                    "upload_details": upload_details.strip(),
                     "data": data_plano.strftime("%d/%m/%Y"),
                     "plan_day": data_plano.isoformat(),
                 }
@@ -800,36 +834,162 @@ def render_generate():
                     modelo = "gemini-1.5-flash"
 
                 raw_json = safe_extract_json(raw_text)
-                plano = PlanoAula(**raw_json)
+                plano = PlanoAula(**raw_json)  # valida estrutura
 
-                pdf_bytes = create_pdf(ctx, plano)
+                # guardar rascunho na sessão (NÃO salva no DB ainda)
+                st.session_state["draft_ctx"] = ctx
+                st.session_state["draft_raw"] = plano.model_dump()
+                st.session_state["draft_model"] = modelo
+                st.session_state["draft_upload_meta"] = {
+                    "upload_name": upload_name,
+                    "upload_b64": upload_b64,
+                    "upload_type": upload_type,
+                }
 
-                save_plan(
-                    user_key=user_key,
-                    ctx=ctx,
-                    plano_json={"ctx": ctx, "plano": plano.model_dump(), "modelo": modelo},
-                    pdf_bytes=pdf_bytes,
-                    upload_name=upload_name,
-                    upload_b64=upload_b64,
-                    upload_type=upload_type,
-                )
-
-                st.success(f"Plano gerado e guardado. Modelo usado: {modelo}")
-                st.download_button(
-                    "⬇️ Baixar PDF agora",
-                    data=pdf_bytes,
-                    file_name=f"Plano_{disciplina}_{classe}_{tema}.pdf".replace(" ", "_"),
-                    mime="application/pdf",
-                    type="primary",
-                )
+                st.success("✅ Plano gerado como rascunho. Agora edite e depois guarde.")
                 st.rerun()
 
             except ValidationError as ve:
                 st.error("A resposta da IA não respeitou o formato esperado (JSON/estrutura).")
                 st.code(str(ve))
-                st.code(raw_text)
             except Exception as e:
-                st.error(f"Erro ao gerar: {e}")
+                st.error("Erro ao gerar o plano.")
+                st.code(str(e))
+
+    st.divider()
+
+    # -------------------------
+    # 2) EDITAR + 3) GUARDAR
+    # -------------------------
+    if st.session_state.get("draft_ctx") and st.session_state.get("draft_raw"):
+        st.subheader("📝 Rascunho do Plano (editar antes de guardar)")
+
+        ctx = st.session_state["draft_ctx"]
+        draft = st.session_state["draft_raw"]
+        modelo = st.session_state.get("draft_model", "-")
+        upload_meta = st.session_state.get("draft_upload_meta", {}) or {}
+
+        st.caption(f"Modelo IA: {modelo}")
+
+        # Objectivo geral (pode ser string ou lista)
+        og = draft.get("objetivo_geral", "")
+        if isinstance(og, list):
+            og_text = "\n".join([str(x) for x in og])
+        else:
+            og_text = str(og)
+
+        og_edit = st.text_area("Objectivo(s) Geral(is) (1 por linha se forem vários)", og_text, height=120)
+
+        # Objectivos específicos
+        oes = draft.get("objetivos_especificos", []) or []
+        oes_text = "\n".join([str(x) for x in oes])
+        oes_edit = st.text_area("Objectivos Específicos (1 por linha)", oes_text, height=140)
+
+        # Tabela editável
+        tabela = draft.get("tabela", []) or []
+        df_tab = pd.DataFrame(tabela, columns=TABLE_COLS) if tabela else pd.DataFrame(columns=TABLE_COLS)
+
+        st.markdown("#### 📋 Tabela didáctica (edite as células)")
+        df_tab_edit = st.data_editor(
+            df_tab,
+            use_container_width=True,
+            num_rows="dynamic",
+            key="draft_table_editor"
+        )
+
+        colA, colB, colC = st.columns([0.25, 0.25, 0.5])
+
+        with colA:
+            if st.button("❌ Cancelar rascunho"):
+                for k in ["draft_ctx", "draft_raw", "draft_model", "draft_upload_meta"]:
+                    st.session_state.pop(k, None)
+                st.rerun()
+
+        with colB:
+            if st.button("✅ Guardar Plano", type="primary"):
+                # 1) Validar duplicado (mesmo Tema) antes de guardar
+                if plan_already_exists_same_tema(user_key, ctx["tema"]):
+                    st.error("Não é permitido guardar: já existe um plano com este mesmo Tema para este professor.")
+                    st.stop()
+
+                # 2) Construir plano editado
+                og_final = [x.strip() for x in og_edit.split("\n") if x.strip()]
+                if len(og_final) == 1:
+                    og_final = og_final[0]  # volta a ser string se for só 1
+
+                oes_final = [x.strip() for x in oes_edit.split("\n") if x.strip()]
+                if not oes_final:
+                    st.error("Escreva pelo menos 1 objectivo específico.")
+                    st.stop()
+
+                # 3) Validar tabela: precisa de 6 colunas e pelo menos 1 linha
+                if df_tab_edit is None or df_tab_edit.empty:
+                    st.error("A tabela está vazia.")
+                    st.stop()
+
+                # garantir colunas
+                for c in TABLE_COLS:
+                    if c not in df_tab_edit.columns:
+                        st.error("Tabela inválida: faltam colunas.")
+                        st.stop()
+
+                tabela_final = []
+                for _, r in df_tab_edit.iterrows():
+                    row = [str(r[c]) if pd.notna(r[c]) else "" for c in TABLE_COLS]
+                    # opcional: ignorar linhas totalmente vazias
+                    if normalize_text("".join(row)) == "":
+                        continue
+                    tabela_final.append(row)
+
+                if not tabela_final:
+                    st.error("A tabela ficou sem linhas válidas.")
+                    st.stop()
+
+                try:
+                    plano_final = PlanoAula(
+                        objetivo_geral=og_final,
+                        objetivos_especificos=oes_final,
+                        tabela=tabela_final
+                    )
+                except ValidationError as ve:
+                    st.error("O rascunho editado ficou inválido (estrutura).")
+                    st.code(str(ve))
+                    st.stop()
+
+                # 4) Gerar PDF + salvar
+                pdf_bytes = create_pdf(ctx, plano_final)
+
+                plano_payload = {
+                    "ctx": ctx,
+                    "plano": plano_final.model_dump(),
+                    "modelo": modelo,
+                }
+
+                save_plan(
+                    user_key=user_key,
+                    ctx=ctx,
+                    plano_json=plano_payload,
+                    pdf_bytes=pdf_bytes,
+                    upload_name=upload_meta.get("upload_name"),
+                    upload_b64=upload_meta.get("upload_b64"),
+                    upload_type=upload_meta.get("upload_type"),
+                )
+
+                # limpar rascunho
+                for k in ["draft_ctx", "draft_raw", "draft_model", "draft_upload_meta"]:
+                    st.session_state.pop(k, None)
+
+                st.success("✅ Plano guardado com sucesso.")
+                st.download_button(
+                    "⬇️ Baixar PDF",
+                    data=pdf_bytes,
+                    file_name=f"Plano_{ctx['disciplina']}_{ctx['classe']}_{ctx['tema']}.pdf".replace(" ", "_"),
+                    mime="application/pdf",
+                    type="primary",
+                )
+
+        with colC:
+            st.info("Dica: primeiro edita aqui, depois clica **Guardar Plano**. Só assim ele entra no histórico.")
 
 
 # =========================
@@ -852,7 +1012,6 @@ def render_admin_history():
     df2["professor"] = df2["user_key"].apply(lambda k: users_map.get(k, {}).get("name", k))
     df2["escola"] = df2["user_key"].apply(lambda k: users_map.get(k, {}).get("school", "-"))
 
-    # filtros
     c1, c2, c3 = st.columns(3)
     with c1:
         escolas = ["Todas"] + sorted(df2["escola"].astype(str).unique().tolist())
