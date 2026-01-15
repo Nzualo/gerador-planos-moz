@@ -4,7 +4,7 @@
 # Login com PIN:
 #  - 1º acesso: Nome + Escola + PIN
 #  - Próximos acessos: Nome + PIN
-# Admin separado (senha própria) na sidebar
+# Administrador separado (senha própria) na sidebar
 #
 # Professor:
 # 1) Preenche dados -> Gerar rascunho
@@ -12,8 +12,10 @@
 # 3) Guardar (não permite repetir tema para o mesmo professor) + Baixar PDF
 # Histórico: baixar e apagar planos
 #
-# Admin:
+# Administrador:
 # - Ver planos de todos com filtros (data/escola/professor), baixar e apagar
+# - Exportar CSV (filtrado e todos)
+# - Relatório mensal por escola (CSV)
 # - Gestão de utilizadores: aprovar/bloquear/trial, limite diário (2/6), reset PIN, apagar utilizador
 # =========================================================
 
@@ -160,11 +162,7 @@ def expand_abbrev(s: str) -> str:
     t = re.sub(r"\beb\b", "escola basica", t)
     t = re.sub(r"\bes\b", "escola secundaria", t)
     t = re.sub(r"\bii\b", "instituto", t)
-    t = re.sub(
-        r"\bsdejt\b",
-        "servico distrital de educacao juventude e tecnologia",
-        t,
-    )
+    t = re.sub(r"\bsdejt\b", "servico distrital de educacao juventude e tecnologia", t)
     return t
 
 def school_key(s: str) -> str:
@@ -521,7 +519,11 @@ def create_pdf(ctx: dict, plano: PlanoAula) -> bytes:
     pdf.cell(130, 7, f"Escola: {clean_text(ctx['escola'])}", 0, 0)
     pdf.cell(0, 7, f"Data: {clean_text(ctx['data'])}", 0, 1)
 
-    pdf.cell(0, 7, f"Disciplina: {clean_text(ctx['disciplina'])}   Classe: {clean_text(ctx['classe'])}   Turma: {clean_text(ctx['turma'])}", 0, 1)
+    pdf.cell(
+        0, 7,
+        f"Disciplina: {clean_text(ctx['disciplina'])}   Classe: {clean_text(ctx['classe'])}   Turma: {clean_text(ctx['turma'])}",
+        0, 1
+    )
     pdf.cell(0, 7, f"Unidade Temática: {clean_text(ctx['unidade'])}", 0, 1)
     pdf.set_font("Arial", "B", 10)
     pdf.cell(0, 7, f"Tema: {clean_text(ctx['tema'])}", 0, 1)
@@ -582,8 +584,7 @@ def refresh_user_state():
         st.session_state["user_name"] = u.get("name", "")
         st.session_state["user_school"] = u.get("school", "")
         st.session_state["user_status"] = (u.get("status") or "trial")
-        if "daily_limit" not in st.session_state:
-            st.session_state["daily_limit"] = int(u.get("daily_limit") or 2)
+        st.session_state["daily_limit"] = int(u.get("daily_limit") or 2)
 
 
 # =========================
@@ -1017,10 +1018,10 @@ def render_generate():
 
 
 # =========================
-# ADMIN: PLANOS + FILTROS + APAGAR
+# ADMIN: PLANOS + FILTROS + CSV + RELATÓRIO + APAGAR
 # =========================
 def render_admin_history():
-    st.subheader("📚 Planos (Admin) — Todos os Planos")
+    st.subheader("📚 Planos (Administrador)")
     df = list_plans_all()
     if df.empty:
         st.info("Ainda não há planos no sistema.")
@@ -1036,6 +1037,7 @@ def render_admin_history():
     df2["professor"] = df2["user_key"].apply(lambda k: users_map.get(k, {}).get("name", k))
     df2["escola"] = df2["user_key"].apply(lambda k: users_map.get(k, {}).get("school", "-"))
 
+    # filtros
     c1, c2, c3 = st.columns(3)
     with c1:
         escolas = ["Todas"] + sorted(df2["escola"].astype(str).unique().tolist())
@@ -1055,6 +1057,132 @@ def render_admin_history():
     if prof_f != "Todos":
         dff = dff[dff["professor"].astype(str) == prof_f]
 
+    # -------------------------
+    # Exportar CSV (filtrado e todos)
+    # -------------------------
+    st.markdown("### ⬇️ Exportar CSV")
+
+    export_df = dff.copy()
+    cols = [
+        "plan_day","escola","professor","disciplina","classe","unidade","tema","turma",
+        "tipo_aula","duracao","metodos","meios","upload_details","created_at","user_key","id"
+    ]
+    cols = [c for c in cols if c in export_df.columns]
+    export_df = export_df[cols]
+    csv_filtrado = export_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+
+    fname_parts = ["planos_filtrados"]
+    if escola_f != "Todas":
+        fname_parts.append(normalize_text(escola_f).replace(" ", "_")[:30])
+    if data_f != "Todas":
+        fname_parts.append(str(data_f))
+    if prof_f != "Todos":
+        fname_parts.append(normalize_text(prof_f).replace(" ", "_")[:25])
+    filename_filtrado = "_".join(fname_parts) + ".csv"
+
+    all_df = df2.copy()
+    cols_all = [c for c in cols if c in all_df.columns]
+    all_df = all_df[cols_all]
+    csv_todos = all_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+
+    b1, b2 = st.columns(2)
+    with b1:
+        st.download_button(
+            "📄 Baixar CSV (filtrado)",
+            data=csv_filtrado,
+            file_name=filename_filtrado,
+            mime="text/csv",
+            type="primary",
+            key="download_csv_admin_filtrado",
+        )
+    with b2:
+        st.download_button(
+            "📄 Baixar CSV (todos)",
+            data=csv_todos,
+            file_name="planos_todos.csv",
+            mime="text/csv",
+            key="download_csv_admin_todos",
+        )
+
+    # -------------------------
+    # Relatório mensal por escola
+    # -------------------------
+    st.divider()
+    st.subheader("📊 Relatório mensal por escola")
+
+    hoje = date.today()
+    anos = list(range(hoje.year - 2, hoje.year + 1))
+    meses = list(range(1, 13))
+
+    cR1, cR2 = st.columns(2)
+    with cR1:
+        ano_sel = st.selectbox("Ano", anos, index=anos.index(hoje.year), key="rep_ano")
+    with cR2:
+        mes_sel = st.selectbox("Mês", meses, index=meses.index(hoje.month), key="rep_mes")
+
+    df_rep = df2.copy()
+    df_rep = df_rep[df_rep["plan_day"].notna()]
+    df_rep["plan_day"] = pd.to_datetime(df_rep["plan_day"], errors="coerce")
+    df_rep = df_rep[df_rep["plan_day"].dt.year == int(ano_sel)]
+    df_rep = df_rep[df_rep["plan_day"].dt.month == int(mes_sel)]
+
+    if df_rep.empty:
+        st.info("Sem planos no mês seleccionado.")
+    else:
+        rep = (
+            df_rep.groupby("escola", dropna=False)
+            .agg(
+                total_planos=("id", "count"),
+                professores_ativos=("professor", "nunique"),
+                primeiro_plano=("plan_day", "min"),
+                ultimo_plano=("plan_day", "max"),
+            )
+            .reset_index()
+            .sort_values(["total_planos", "escola"], ascending=[False, True])
+        )
+        rep["media_planos_por_prof"] = (rep["total_planos"] / rep["professores_ativos"]).round(2)
+
+        st.dataframe(
+            rep[["escola","total_planos","professores_ativos","media_planos_por_prof","primeiro_plano","ultimo_plano"]],
+            hide_index=True,
+            use_container_width=True,
+        )
+
+        rep_prof = (
+            df_rep.groupby(["escola", "professor"], dropna=False)
+            .agg(total_planos=("id", "count"))
+            .reset_index()
+            .sort_values(["escola", "total_planos", "professor"], ascending=[True, False, True])
+        )
+
+        csv_escola = rep.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+        csv_prof = rep_prof.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+
+        f1 = f"relatorio_escolas_{ano_sel}-{str(mes_sel).zfill(2)}.csv"
+        f2 = f"relatorio_escola_prof_{ano_sel}-{str(mes_sel).zfill(2)}.csv"
+
+        bA, bB = st.columns(2)
+        with bA:
+            st.download_button(
+                "📄 Baixar relatório (por escola)",
+                data=csv_escola,
+                file_name=f1,
+                mime="text/csv",
+                type="primary",
+                key="dl_rel_escola",
+            )
+        with bB:
+            st.download_button(
+                "📄 Baixar relatório (escola + professor)",
+                data=csv_prof,
+                file_name=f2,
+                mime="text/csv",
+                key="dl_rel_prof",
+            )
+
+    # tabela (planos filtrados)
+    st.divider()
+    st.subheader("📋 Lista (com filtros)")
     st.dataframe(
         dff[["plan_day","escola","professor","disciplina","classe","unidade","tema","turma","upload_details","created_at"]],
         hide_index=True,
@@ -1065,6 +1193,7 @@ def render_admin_history():
         st.info("Nenhum plano para estes filtros.")
         return
 
+    dff = dff.copy()
     dff["label"] = (
         dff["plan_day"].astype(str) + " | " +
         dff["escola"].astype(str) + " | " +
@@ -1099,7 +1228,7 @@ def render_admin_history():
 # ADMIN: UTILIZADORES (com limite diário 2/6)
 # =========================
 def render_admin_users():
-    st.subheader("🛠️ Utilizadores (Admin)")
+    st.subheader("🛠️ Utilizadores (Administrador)")
     users = list_users_df()
     if users.empty:
         st.info("Sem utilizadores registados.")
@@ -1135,7 +1264,6 @@ def render_admin_users():
     st.markdown("### Limite diário (planos por dia)")
     current_daily = int(row.get("daily_limit") or 2)
 
-    # apenas 2 ou 6 (como pediu), mas pode ampliar se quiser
     daily_limit = st.selectbox("Escolher limite diário", [2, 6], index=0 if current_daily == 2 else 1, key="adm_daily_sel")
 
     if st.button("💾 Guardar limite diário", key="adm_save_daily"):
