@@ -1,18 +1,20 @@
 # app.py
 # =========================================================
-# MZ SDEJT - Elaboração de Planos (Inhassoro)
+# MZ SDEJT - Elaboração de Planos (SDEJT)
 # Login com PIN:
 #  - 1º acesso: Nome + Escola + PIN
-#  - Próximos: Nome + PIN
+#  - Próximos acessos: Nome + PIN
 # Admin separado (senha própria) na sidebar
 #
-# Fluxo do professor:
-# 1) Preenche dados -> Gerar plano
-# 2) Edita o rascunho (objectivos + tabela)
-# 3) Guardar (sem repetir tema igual para o mesmo professor) + Baixar PDF
+# Professor:
+# 1) Preenche dados -> Gerar rascunho
+# 2) Edita (objectivo geral, 3 específicos se 45 min, 5 se 90 min, + tabela)
+# 3) Guardar (não permite repetir tema para o mesmo professor) + Baixar PDF
+# Histórico: baixar e apagar planos
 #
-# O professor e o administrador podem apagar planos.
-# O administrador pode gerir utilizadores (aprovar/bloquear/trial, limites, reset PIN, apagar).
+# Admin:
+# - Ver planos de todos com filtros (data/escola/professor), baixar e apagar
+# - Gestão de utilizadores: aprovar/bloquear/trial, limite diário (2/6), reset PIN, apagar utilizador
 # =========================================================
 
 import re
@@ -210,6 +212,7 @@ def create_user(user_key: str, name: str, school_official: str, pin_h: str):
             "school": school_official.strip(),
             "pin_hash": pin_h,
             "status": "trial",
+            "daily_limit": 2,
             "created_at": datetime.now().isoformat(),
         }
     ).execute()
@@ -227,21 +230,16 @@ def set_user_status(user_key: str, status: str):
     sb = supa()
     sb.table("app_users").update({"status": status}).eq("user_key", user_key).execute()
 
+def update_user_daily_limit(user_key: str, daily_limit: int):
+    sb = supa()
+    sb.table("app_users").update({"daily_limit": int(daily_limit)}).eq("user_key", user_key).execute()
+
 def list_users_df() -> pd.DataFrame:
     sb = supa()
     r = sb.table("app_users").select(
-        "user_key,name,school,status,created_at,plan_limit,monthly_limit,expires_at,last_login_at"
+        "user_key,name,school,status,created_at,daily_limit,last_login_at"
     ).order("created_at", desc=True).execute()
     return pd.DataFrame(r.data or [])
-
-def update_user_limits(user_key: str, plan_limit: int, monthly_limit: int, expires_at: date | None):
-    sb = supa()
-    payload = {
-        "plan_limit": int(plan_limit),
-        "monthly_limit": int(monthly_limit),
-        "expires_at": expires_at.isoformat() if expires_at else None,
-    }
-    sb.table("app_users").update(payload).eq("user_key", user_key).execute()
 
 def admin_reset_pin(user_key: str, new_pin: str):
     sb = supa()
@@ -252,14 +250,6 @@ def delete_user_and_data(user_key: str, delete_plans: bool = True):
     if delete_plans:
         sb.table("user_plans").delete().eq("user_key", user_key).execute()
     sb.table("app_users").delete().eq("user_key", user_key).execute()
-
-def count_user_plans(user_key: str) -> int:
-    sb = supa()
-    r = sb.table("user_plans").select("id", count="exact").eq("user_key", user_key).execute()
-    try:
-        return int(getattr(r, "count", 0) or 0)
-    except Exception:
-        return 0
 
 def update_last_login(user_key: str):
     try:
@@ -306,8 +296,16 @@ def list_plans_all() -> pd.DataFrame:
     df["plan_day"] = pd.to_datetime(df["plan_day"], errors="coerce").dt.date
     return df
 
+def count_plans_today(user_key: str) -> int:
+    sb = supa()
+    today = date.today().isoformat()
+    r = sb.table("user_plans").select("id", count="exact").eq("user_key", user_key).eq("plan_day", today).execute()
+    try:
+        return int(getattr(r, "count", 0) or 0)
+    except Exception:
+        return 0
+
 def tema_ja_existe(user_key: str, tema: str) -> bool:
-    """Evita repetir planos com o mesmo tema (comparação normalizada) para o mesmo professor."""
     sb = supa()
     r = sb.table("user_plans").select("tema").eq("user_key", user_key).execute()
     existentes = [x.get("tema", "") for x in (r.data or [])]
@@ -335,7 +333,7 @@ def save_plan(
     sb.table("user_plans").insert(
         {
             "user_key": user_key,
-            "plan_day": ctx["plan_day"],
+            "plan_day": ctx["plan_day"],  # dia de uso (hoje) para limite diário
             "disciplina": ctx["disciplina"],
             "classe": ctx["classe"],
             "unidade": ctx["unidade"],
@@ -384,8 +382,6 @@ def safe_extract_json(text: str) -> dict:
         raise
 
 def objetivos_alvo_por_duracao(duracao: str) -> int:
-    # 45 min: 1 geral + 3 específicos
-    # 90 min: 1 geral + 5 específicos
     d = normalize_text(duracao)
     if "45" in d:
         return 3
@@ -393,11 +389,6 @@ def objetivos_alvo_por_duracao(duracao: str) -> int:
 
 def build_prompt(ctx: dict, upload_hint: str) -> str:
     n_obj = objetivos_alvo_por_duracao(ctx["duracao"])
-    # Regras essenciais do texto:
-    # - Nunca mencionar nome do professor nas actividades
-    # - Usar verbos "Orienta...", "Explica...", "Distribui...", "Solicita...", etc.
-    # - Objectivos não devem conter nomes de localidades
-    # - Contexto local com moderação e sem exageros
     return f"""
 És um(a) pedagogo(a) especialista do Sistema Nacional de Educação de Moçambique.
 Escreve em Português de Moçambique. Devolve APENAS JSON válido.
@@ -426,8 +417,8 @@ REGRAS:
 3) Nos objectivos NÃO incluir nomes de localidades.
 4) Na tabela, NÃO mencionar nome do professor. Usar sempre expressões como:
    "Orienta...", "Explica...", "Demonstra...", "Solicita...", "Distribui...", "Acompanha...", "Regista...", "Avalia...".
-5) Contextualização local: usar exemplos do quotidiano com MODERAÇÃO, sem repetir nomes de localidades.
-6) Tabela com 6 colunas, e 4 linhas na ordem exacta das funções didácticas:
+5) Contextualização local: usar exemplos do quotidiano com moderação, sem repetir nomes de localidades.
+6) Tabela com 6 colunas, e 4 linhas na ordem exacta:
    - Introdução e Motivação
    - Mediação e Assimilação
    - Domínio e Consolidação
@@ -449,7 +440,6 @@ FORMATO JSON:
 
 Garante que cada linha da tabela tem exactamente 6 células.
 """.strip()
-
 
 @st.cache_data(ttl=3600)
 def cached_generate(prompt: str, model_name: str) -> str:
@@ -543,7 +533,6 @@ def create_pdf(ctx: dict, plano: PlanoAula) -> bytes:
         pdf.multi_cell(0, 6, f"Métodos sugeridos: {clean_text(ctx['metodos'])}")
     if ctx.get("meios"):
         pdf.multi_cell(0, 6, f"Meios/Materiais sugeridos: {clean_text(ctx['meios'])}")
-
     if ctx.get("upload_details"):
         pdf.multi_cell(0, 6, f"Detalhes do ficheiro (opcional): {clean_text(ctx['upload_details'])}")
 
@@ -577,7 +566,7 @@ def create_pdf(ctx: dict, plano: PlanoAula) -> bytes:
 def logout():
     for k in [
         "logged_in", "user_key", "user_name", "user_school", "user_status", "is_admin",
-        "draft_ctx", "draft_plan", "draft_upload_name", "draft_upload_b64", "draft_upload_type"
+        "draft_ctx", "draft_plan", "draft_upload_name", "draft_upload_b64", "draft_upload_type", "draft_modelo"
     ]:
         st.session_state.pop(k, None)
     st.rerun()
@@ -593,6 +582,8 @@ def refresh_user_state():
         st.session_state["user_name"] = u.get("name", "")
         st.session_state["user_school"] = u.get("school", "")
         st.session_state["user_status"] = (u.get("status") or "trial")
+        if "daily_limit" not in st.session_state:
+            st.session_state["daily_limit"] = int(u.get("daily_limit") or 2)
 
 
 # =========================
@@ -721,6 +712,7 @@ user_name = st.session_state.get("user_name")
 user_school = st.session_state.get("user_school")
 user_status = st.session_state.get("user_status", "trial")
 
+
 top_left, top_right = st.columns([0.75, 0.25])
 with top_left:
     st.write(f"**Professor:** {user_name}  |  **Escola:** {user_school}  |  **Estado:** {user_status}")
@@ -730,10 +722,305 @@ with top_right:
 
 
 # =========================
-# ADMIN: FUNÇÕES
+# PROFESSOR: HISTÓRICO + APAGAR
+# =========================
+def render_user_history():
+    st.subheader("📚 Meus Planos (Histórico)")
+    df = list_plans_user(user_key)
+    if df.empty:
+        st.info("Ainda não há planos guardados no seu histórico.")
+        return
+
+    df2 = df.copy()
+    df2["label"] = (
+        df2["plan_day"].astype(str) + " | " +
+        df2["disciplina"].astype(str) + " | " +
+        df2["classe"].astype(str) + " | " +
+        df2["tema"].astype(str)
+    )
+    st.dataframe(
+        df2[["plan_day","disciplina","classe","unidade","tema","turma","upload_details","created_at"]],
+        hide_index=True,
+        use_container_width=True
+    )
+
+    sel = st.selectbox("Seleccionar plano", df2["label"].tolist(), key="usr_sel_plan")
+    row = df2[df2["label"] == sel].iloc[0]
+    pdf_bytes = pdf_from_b64(row["pdf_b64"])
+
+    c1, c2 = st.columns([0.6, 0.4])
+    with c1:
+        if pdf_bytes:
+            st.download_button(
+                "⬇️ Baixar PDF",
+                data=pdf_bytes,
+                file_name=f"Plano_{row['disciplina']}_{row['classe']}_{row['tema']}.pdf".replace(" ", "_"),
+                mime="application/pdf",
+                type="primary",
+            )
+    with c2:
+        confirm_del = st.checkbox("Confirmar apagar este plano", key="usr_conf_del_plan")
+        if st.button("🗑️ Apagar plano", disabled=not confirm_del, key="usr_del_plan"):
+            delete_plan(int(row["id"]))
+            st.success("Plano apagado.")
+            st.rerun()
+
+
+# =========================
+# PROFESSOR: GERAR -> EDITAR -> GUARDAR (com limite diário)
+# =========================
+def get_daily_limit(user_key: str) -> int:
+    u = get_user_by_key(user_key)
+    if not u:
+        return 2
+    try:
+        return int(u.get("daily_limit") or 2)
+    except Exception:
+        return 2
+
+def render_generate():
+    st.subheader("🧑‍🏫 Criar Plano")
+
+    daily_limit = get_daily_limit(user_key)
+    used_today = count_plans_today(user_key)
+    remaining = max(0, daily_limit - used_today)
+    st.info(f"Hoje: **{used_today}/{daily_limit}** planos. Restam: **{remaining}**.")
+
+    # CAMPOS OBRIGATÓRIOS
+    col1, col2 = st.columns(2)
+    with col1:
+        disciplina = st.text_input("Disciplina", "Língua Portuguesa", key="g_disciplina")
+        classe = st.selectbox("Classe", ["1ª","2ª","3ª","4ª","5ª","6ª","7ª","8ª","9ª","10ª","11ª","12ª"], key="g_classe")
+        unidade = st.text_input("Unidade Temática *", "", key="g_unidade")
+    with col2:
+        tema = st.text_input("Tema *", "", key="g_tema")
+        turma = st.text_input("Turma", "A", key="g_turma")
+        data_plano = st.date_input("Data do Plano", value=date.today(), key="g_data")
+
+    # CAMPOS DIDÁTICOS (OPCIONAIS)
+    col3, col4 = st.columns(2)
+    with col3:
+        duracao = st.selectbox("Duração", ["45 Min", "90 Min"], key="g_duracao")
+        tipo_aula = st.selectbox(
+            "Tipo de Aula",
+            ["Introdução de Matéria Nova", "Consolidação e Exercitação", "Verificação e Avaliação", "Revisão"],
+            key="g_tipo"
+        )
+    with col4:
+        metodos = st.text_area("Métodos (opcional)", "", height=110, key="g_metodos")
+        meios = st.text_area("Meios/Materiais didácticos (opcional)", "", height=110, key="g_meios")
+
+    st.markdown("### 📎 Ficheiro (opcional)")
+    upload = st.file_uploader("Carregar ficheiro (png/jpg/pdf) - opcional", type=["png","jpg","jpeg","pdf"], key="g_upload")
+    upload_details = st.text_area(
+        "Detalhes do ficheiro (opcional)",
+        placeholder="Ex.: Página 23 do livro, texto/figura para usar em exemplos e actividades.",
+        height=90,
+        key="g_upload_details"
+    )
+
+    missing_fields = []
+    if not unidade.strip():
+        missing_fields.append("Unidade Temática")
+    if not tema.strip():
+        missing_fields.append("Tema")
+
+    if missing_fields:
+        st.warning("Preencha: " + ", ".join(missing_fields))
+
+    # Botão: gerar rascunho
+    if st.button("Gerar plano", type="primary", disabled=bool(missing_fields) or remaining <= 0, key="btn_gerar"):
+        if remaining <= 0:
+            st.error("Limite diário atingido. Solicite aumento ao administrador.")
+            st.stop()
+
+        # não gerar se já existe tema guardado
+        if tema_ja_existe(user_key, tema.strip()):
+            st.error("Já existe um plano guardado com este tema. Altere o tema ou apague o plano anterior.")
+            st.stop()
+
+        with st.spinner("A gerar o rascunho..."):
+            try:
+                genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+
+                upload_name = None
+                upload_b64 = None
+                upload_type = None
+                upload_hint = ""
+
+                if upload is not None:
+                    upload_name = upload.name
+                    upload_type = upload.type or ""
+                    upload_bytes = upload.getvalue()
+                    upload_b64 = base64.b64encode(upload_bytes).decode("utf-8")
+
+                    det = (upload_details or "").strip()
+                    if det:
+                        upload_hint = (
+                            f"- Ficheiro enviado: {upload_name} ({upload_type}).\n"
+                            f"- Detalhes: {det}\n"
+                            f"Use com moderação para enriquecer exemplos e exercícios."
+                        )
+                    else:
+                        upload_hint = f"- Ficheiro enviado: {upload_name} ({upload_type}). Use com moderação para enriquecer exemplos e exercícios."
+
+                ctx = {
+                    "escola": user_school,
+                    "professor": user_name,
+                    "disciplina": disciplina.strip(),
+                    "classe": classe,
+                    "unidade": unidade.strip(),
+                    "tema": tema.strip(),
+                    "turma": turma.strip(),
+                    "duracao": duracao,
+                    "tipo_aula": tipo_aula,
+                    "metodos": metodos.strip(),
+                    "meios": meios.strip(),
+                    "data": data_plano.strftime("%d/%m/%Y"),
+                    "plan_day": date.today().isoformat(),  # limite diário pelo dia de uso
+                    "upload_details": (upload_details or "").strip(),
+                }
+
+                prompt = build_prompt(ctx, upload_hint)
+
+                # tenta um modelo e fallback
+                try:
+                    raw_text = cached_generate(prompt, "models/gemini-2.5-flash")
+                    modelo = "gemini-2.5-flash"
+                except Exception:
+                    raw_text = cached_generate(prompt, "models/gemini-1.5-flash")
+                    modelo = "gemini-1.5-flash"
+
+                raw_json = safe_extract_json(raw_text)
+                plano = PlanoAula(**raw_json)
+
+                alvo = objetivos_alvo_por_duracao(duracao)
+                if len(plano.objetivos_especificos) != alvo:
+                    oes = list(plano.objetivos_especificos)
+                    if len(oes) > alvo:
+                        oes = oes[:alvo]
+                    while len(oes) < alvo:
+                        oes.append("Realizar exercícios de aplicação relacionados ao tema.")
+                    plano.objetivos_especificos = oes
+
+                st.session_state["draft_ctx"] = ctx
+                st.session_state["draft_plan"] = plano.model_dump()
+                st.session_state["draft_upload_name"] = upload_name
+                st.session_state["draft_upload_b64"] = upload_b64
+                st.session_state["draft_upload_type"] = upload_type
+                st.session_state["draft_modelo"] = modelo
+
+                st.success("Rascunho gerado. Pode editar abaixo e depois guardar.")
+                st.rerun()
+
+            except ValidationError as ve:
+                st.error("A resposta não respeitou o formato esperado (JSON/estrutura).")
+                st.code(str(ve))
+                st.code(raw_text if "raw_text" in locals() else "")
+            except Exception as e:
+                st.error(f"Erro ao gerar: {e}")
+
+    # Editar e guardar
+    if st.session_state.get("draft_ctx") and st.session_state.get("draft_plan"):
+        st.divider()
+        st.subheader("✍️ Editar rascunho")
+
+        ctx = st.session_state["draft_ctx"]
+        plan = st.session_state["draft_plan"]
+
+        obj_geral = st.text_area("Objectivo geral", value=plan.get("objetivo_geral", ""), height=80, key="ed_obj_geral")
+
+        alvo = objetivos_alvo_por_duracao(ctx["duracao"])
+        oes = list(plan.get("objetivos_especificos", []))
+        oes = oes[:alvo] + ([""] * max(0, alvo - len(oes)))
+
+        st.markdown(f"**Objectivos específicos ({alvo})**")
+        edited_oes = []
+        for i in range(alvo):
+            edited_oes.append(st.text_input(f"{i+1}.", value=oes[i], key=f"ed_oe_{i}"))
+
+        tabela = list(plan.get("tabela", []))
+        while len(tabela) < 4:
+            tabela.append(["", "", "", "", "", ""])
+        tabela = tabela[:4]
+
+        df_tab = pd.DataFrame(tabela, columns=TABLE_COLS)
+        st.markdown("**Tabela de actividades**")
+        df_edit = st.data_editor(df_tab, use_container_width=True, num_rows="fixed", key="ed_table")
+
+        c1, c2 = st.columns([0.6, 0.4])
+        with c1:
+            if st.button("Guardar e baixar PDF", type="primary", key="btn_guardar"):
+                daily_limit2 = get_daily_limit(user_key)
+                used_today2 = count_plans_today(user_key)
+                if used_today2 >= daily_limit2:
+                    st.error("Limite diário atingido. Solicite aumento ao administrador.")
+                    st.stop()
+
+                if tema_ja_existe(user_key, ctx["tema"]):
+                    st.error("Já existe um plano guardado com este tema. Apague o anterior ou altere o tema.")
+                    st.stop()
+
+                if not obj_geral.strip():
+                    st.error("Preencha o objectivo geral.")
+                    st.stop()
+                if any(not x.strip() for x in edited_oes):
+                    st.error("Preencha todos os objectivos específicos.")
+                    st.stop()
+
+                final_plan = {
+                    "objetivo_geral": obj_geral.strip(),
+                    "objetivos_especificos": [x.strip() for x in edited_oes],
+                    "tabela": df_edit.values.tolist(),
+                }
+
+                try:
+                    plano_obj = PlanoAula(**final_plan)
+                except ValidationError as ve:
+                    st.error("Há campos inválidos no rascunho (tabela/estrutura).")
+                    st.code(str(ve))
+                    st.stop()
+
+                pdf_bytes = create_pdf(ctx, plano_obj)
+
+                save_plan(
+                    user_key=user_key,
+                    ctx=ctx,
+                    plano_json={"ctx": ctx, "plano": plano_obj.model_dump(), "modelo": st.session_state.get("draft_modelo", "")},
+                    pdf_bytes=pdf_bytes,
+                    upload_name=st.session_state.get("draft_upload_name"),
+                    upload_b64=st.session_state.get("draft_upload_b64"),
+                    upload_type=st.session_state.get("draft_upload_type"),
+                    upload_details=ctx.get("upload_details"),
+                )
+
+                for k in ["draft_ctx", "draft_plan", "draft_upload_name", "draft_upload_b64", "draft_upload_type", "draft_modelo"]:
+                    st.session_state.pop(k, None)
+
+                st.success("Plano guardado com sucesso.")
+                st.download_button(
+                    "⬇️ Baixar PDF",
+                    data=pdf_bytes,
+                    file_name=f"Plano_{ctx['disciplina']}_{ctx['classe']}_{ctx['tema']}.pdf".replace(" ", "_"),
+                    mime="application/pdf",
+                    type="primary",
+                    key="dl_after_save"
+                )
+                st.rerun()
+
+        with c2:
+            if st.button("Descartar rascunho", key="btn_descartar"):
+                for k in ["draft_ctx", "draft_plan", "draft_upload_name", "draft_upload_b64", "draft_upload_type", "draft_modelo"]:
+                    st.session_state.pop(k, None)
+                st.info("Rascunho descartado.")
+                st.rerun()
+
+
+# =========================
+# ADMIN: PLANOS + FILTROS + APAGAR
 # =========================
 def render_admin_history():
-    st.subheader("📚 Histórico (Admin) — Todos os Planos")
+    st.subheader("📚 Planos (Admin) — Todos os Planos")
     df = list_plans_all()
     if df.empty:
         st.info("Ainda não há planos no sistema.")
@@ -755,7 +1042,7 @@ def render_admin_history():
         escola_f = st.selectbox("Filtrar por escola", escolas, key="adm_f_escola")
     with c2:
         datas = ["Todas"] + sorted({str(d) for d in df2["plan_day"].dropna().tolist()})
-        data_f = st.selectbox("Filtrar por data do plano", datas, key="adm_f_data")
+        data_f = st.selectbox("Filtrar por dia", datas, key="adm_f_data")
     with c3:
         profs = ["Todos"] + sorted(df2["professor"].astype(str).unique().tolist())
         prof_f = st.selectbox("Filtrar por professor", profs, key="adm_f_prof")
@@ -807,20 +1094,18 @@ def render_admin_history():
             st.success("Plano apagado.")
             st.rerun()
 
+
+# =========================
+# ADMIN: UTILIZADORES (com limite diário 2/6)
+# =========================
 def render_admin_users():
     st.subheader("🛠️ Utilizadores (Admin)")
-
     users = list_users_df()
     if users.empty:
         st.info("Sem utilizadores registados.")
         return
 
-    cols_show = ["name","school","status","created_at"]
-    for extra in ["plan_limit","monthly_limit","expires_at","last_login_at"]:
-        if extra in users.columns:
-            cols_show.append(extra)
-
-    st.dataframe(users[cols_show], hide_index=True, use_container_width=True)
+    st.dataframe(users[["name","school","status","daily_limit","created_at","last_login_at"]], hide_index=True, use_container_width=True)
 
     users2 = users.copy()
     users2["label"] = users2["name"].astype(str) + " — " + users2["school"].astype(str) + " (" + users2["status"].astype(str) + ")"
@@ -828,7 +1113,7 @@ def render_admin_users():
     row = users2[users2["label"] == sel].iloc[0]
     uk = row["user_key"]
 
-    st.markdown("### Estado do utilizador")
+    st.markdown("### Estado")
     c1, c2, c3 = st.columns(3)
     with c1:
         if st.button("✅ Aprovar", key="adm_approve"):
@@ -847,368 +1132,39 @@ def render_admin_users():
             st.rerun()
 
     st.divider()
+    st.markdown("### Limite diário (planos por dia)")
+    current_daily = int(row.get("daily_limit") or 2)
 
-    st.markdown("### Limites e validade")
-    current_plan_limit = int(row.get("plan_limit") or 30)
-    current_monthly_limit = int(row.get("monthly_limit") or 30)
-    current_expires = row.get("expires_at")
-    try:
-        current_expires_date = pd.to_datetime(current_expires).date() if current_expires else None
-    except Exception:
-        current_expires_date = None
+    # apenas 2 ou 6 (como pediu), mas pode ampliar se quiser
+    daily_limit = st.selectbox("Escolher limite diário", [2, 6], index=0 if current_daily == 2 else 1, key="adm_daily_sel")
 
-    c4, c5, c6 = st.columns(3)
-    with c4:
-        plan_limit = st.number_input("Limite total de planos", min_value=1, max_value=5000, value=current_plan_limit, key="adm_lim_total")
-    with c5:
-        monthly_limit = st.number_input("Limite mensal", min_value=1, max_value=5000, value=current_monthly_limit, key="adm_lim_mes")
-    with c6:
-        expires_at = st.date_input("Expira em (opcional)", value=current_expires_date, key="adm_expira")
-
-    if st.button("💾 Guardar limites", key="adm_save_limits"):
-        update_user_limits(uk, int(plan_limit), int(monthly_limit), expires_at if expires_at else None)
-        st.success("Limites actualizados.")
+    if st.button("💾 Guardar limite diário", key="adm_save_daily"):
+        update_user_daily_limit(uk, int(daily_limit))
+        st.success("Limite diário actualizado.")
         st.rerun()
 
     st.divider()
-
-    st.markdown("### Estatísticas")
-    total_plans = count_user_plans(uk)
-    st.info(f"Total de planos guardados: **{total_plans}**")
-
-    st.divider()
-
-    st.markdown("### Segurança / PIN")
-    new_pin = st.text_input("Definir novo PIN", type="password", key="adm_new_pin")
-    confirm_pin = st.text_input("Confirmar novo PIN", type="password", key="adm_new_pin2")
-    if st.button("🔁 Resetar PIN", key="adm_reset_pin"):
+    st.markdown("### Reset PIN")
+    new_pin = st.text_input("Novo PIN", type="password", key="adm_new_pin")
+    new_pin2 = st.text_input("Confirmar PIN", type="password", key="adm_new_pin2")
+    if st.button("🔁 Guardar novo PIN", key="adm_reset_pin"):
         if not new_pin.strip() or len(new_pin.strip()) < 4:
             st.error("PIN muito curto (mínimo 4).")
-        elif new_pin != confirm_pin:
+        elif new_pin != new_pin2:
             st.error("PINs não coincidem.")
         else:
             admin_reset_pin(uk, new_pin.strip())
-            st.success("PIN actualizado com sucesso.")
+            st.success("PIN actualizado.")
             st.rerun()
 
     st.divider()
-
     st.markdown("### Apagar utilizador")
     delete_plans = st.checkbox("Apagar também os planos deste utilizador", value=True, key="adm_del_plans")
-    confirm_del_user = st.checkbox("Confirmo que quero apagar este utilizador", key="adm_confirm_del_user")
-
-    if st.button("🗑️ Apagar utilizador", disabled=not confirm_del_user, key="adm_del_user"):
+    confirm_del = st.checkbox("Confirmo apagar este utilizador", key="adm_confirm_del_user")
+    if st.button("🗑️ Apagar utilizador", disabled=not confirm_del, key="adm_del_user"):
         delete_user_and_data(uk, delete_plans=delete_plans)
         st.success("Utilizador apagado.")
         st.rerun()
-
-
-# =========================
-# PROFESSOR: HISTÓRICO + APAGAR
-# =========================
-def render_user_history():
-    st.subheader("📚 Meus Planos (Histórico)")
-    df = list_plans_user(user_key)
-    if df.empty:
-        st.info("Ainda não há planos guardados no seu histórico.")
-        return
-
-    df2 = df.copy()
-    df2["label"] = (
-        df2["plan_day"].astype(str) + " | " +
-        df2["disciplina"].astype(str) + " | " +
-        df2["classe"].astype(str) + " | " +
-        df2["tema"].astype(str)
-    )
-    st.dataframe(
-        df2[["plan_day","disciplina","classe","unidade","tema","turma","upload_details","created_at"]],
-        hide_index=True,
-        use_container_width=True
-    )
-
-    sel = st.selectbox("Seleccionar plano", df2["label"].tolist(), key="usr_sel_plan")
-    row = df2[df2["label"] == sel].iloc[0]
-    pdf_bytes = pdf_from_b64(row["pdf_b64"])
-
-    c1, c2 = st.columns([0.6, 0.4])
-    with c1:
-        if pdf_bytes:
-            st.download_button(
-                "⬇️ Baixar PDF",
-                data=pdf_bytes,
-                file_name=f"Plano_{row['disciplina']}_{row['classe']}_{row['tema']}.pdf".replace(" ", "_"),
-                mime="application/pdf",
-                type="primary",
-            )
-    with c2:
-        confirm_del = st.checkbox("Confirmar apagar este plano", key="usr_conf_del_plan")
-        if st.button("🗑️ Apagar plano", disabled=not confirm_del, key="usr_del_plan"):
-            delete_plan(int(row["id"]))
-            st.success("Plano apagado.")
-            st.rerun()
-
-
-# =========================
-# PROFESSOR: GERAR -> EDITAR -> GUARDAR
-# =========================
-def enforce_user_limits_or_stop():
-    u = get_user_by_key(user_key)
-    if not u:
-        return
-    # limite total
-    total = count_user_plans(user_key)
-    plan_limit = int(u.get("plan_limit") or 30)
-    if total >= plan_limit:
-        st.error("Chegou ao limite de planos permitido. Contacte o administrador.")
-        st.stop()
-    # expiração (opcional)
-    exp = u.get("expires_at")
-    if exp:
-        try:
-            if date.today() > pd.to_datetime(exp).date():
-                st.error("A conta expirou. Contacte o administrador.")
-                st.stop()
-        except Exception:
-            pass
-
-def render_generate():
-    st.subheader("🧑‍🏫 Gerar Plano")
-
-    # CAMPOS OBRIGATÓRIOS
-    col1, col2 = st.columns(2)
-    with col1:
-        disciplina = st.text_input("Disciplina", "Língua Portuguesa", key="g_disciplina")
-        classe = st.selectbox("Classe", ["1ª","2ª","3ª","4ª","5ª","6ª","7ª","8ª","9ª","10ª","11ª","12ª"], key="g_classe")
-        unidade = st.text_input("Unidade Temática *", "", key="g_unidade")
-    with col2:
-        tema = st.text_input("Tema *", "", key="g_tema")
-        turma = st.text_input("Turma", "A", key="g_turma")
-        data_plano = st.date_input("Data do Plano", value=date.today(), key="g_data")
-
-    # CAMPOS DIDÁTICOS (OPCIONAIS)
-    col3, col4 = st.columns(2)
-    with col3:
-        duracao = st.selectbox("Duração", ["45 Min", "90 Min"], key="g_duracao")
-        tipo_aula = st.selectbox(
-            "Tipo de Aula",
-            ["Introdução de Matéria Nova", "Consolidação e Exercitação", "Verificação e Avaliação", "Revisão"],
-            key="g_tipo"
-        )
-    with col4:
-        metodos = st.text_area("Métodos (opcional)", "", height=110, key="g_metodos")
-        meios = st.text_area("Meios/Materiais didácticos (opcional)", "", height=110, key="g_meios")
-
-    st.markdown("### 📎 Ficheiro (opcional)")
-    upload = st.file_uploader("Carregar ficheiro (png/jpg/pdf) - opcional", type=["png","jpg","jpeg","pdf"], key="g_upload")
-    upload_details = st.text_area(
-        "Detalhes do ficheiro (opcional)",
-        placeholder="Ex.: Página 23 do livro, texto/figura para usar em exemplos e actividades.",
-        height=90,
-        key="g_upload_details"
-    )
-
-    missing_fields = []
-    if not unidade.strip():
-        missing_fields.append("Unidade Temática")
-    if not tema.strip():
-        missing_fields.append("Tema")
-
-    if missing_fields:
-        st.warning("Preencha: " + ", ".join(missing_fields))
-
-    # Botão 1: gerar rascunho
-    if st.button("Gerar plano", type="primary", disabled=bool(missing_fields), key="btn_gerar"):
-        enforce_user_limits_or_stop()
-
-        # não gerar se já existe tema (para o mesmo professor)
-        if tema_ja_existe(user_key, tema.strip()):
-            st.error("Já existe um plano guardado com este tema. Altere o tema ou apague o plano anterior.")
-            st.stop()
-
-        with st.spinner("A gerar o rascunho..."):
-            try:
-                genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-
-                upload_name = None
-                upload_b64 = None
-                upload_type = None
-                upload_hint = ""
-
-                if upload is not None:
-                    upload_name = upload.name
-                    upload_type = upload.type or ""
-                    upload_bytes = upload.getvalue()
-                    upload_b64 = base64.b64encode(upload_bytes).decode("utf-8")
-
-                    det = (upload_details or "").strip()
-                    if det:
-                        upload_hint = (
-                            f"- Ficheiro enviado: {upload_name} ({upload_type}).\n"
-                            f"- Detalhes: {det}\n"
-                            f"Use com moderação para enriquecer exemplos e exercícios."
-                        )
-                    else:
-                        upload_hint = f"- Ficheiro enviado: {upload_name} ({upload_type}). Use com moderação para enriquecer exemplos e exercícios."
-
-                ctx = {
-                    "escola": user_school,
-                    "professor": user_name,
-                    "disciplina": disciplina.strip(),
-                    "classe": classe,
-                    "unidade": unidade.strip(),
-                    "tema": tema.strip(),
-                    "turma": turma.strip(),
-                    "duracao": duracao,
-                    "tipo_aula": tipo_aula,
-                    "metodos": metodos.strip(),
-                    "meios": meios.strip(),
-                    "data": data_plano.strftime("%d/%m/%Y"),
-                    "plan_day": data_plano.isoformat(),
-                    "upload_details": (upload_details or "").strip(),
-                }
-
-                prompt = build_prompt(ctx, upload_hint)
-
-                # tentar um modelo e fallback
-                try:
-                    raw_text = cached_generate(prompt, "models/gemini-2.5-flash")
-                    modelo = "gemini-2.5-flash"
-                except Exception:
-                    raw_text = cached_generate(prompt, "models/gemini-1.5-flash")
-                    modelo = "gemini-1.5-flash"
-
-                raw_json = safe_extract_json(raw_text)
-                plano = PlanoAula(**raw_json)
-
-                # valida nº de objectivos específicos
-                alvo = objetivos_alvo_por_duracao(duracao)
-                if len(plano.objetivos_especificos) != alvo:
-                    # se vier diferente, ajusta cortando ou completando com sugestões simples
-                    oes = list(plano.objetivos_especificos)
-                    if len(oes) > alvo:
-                        oes = oes[:alvo]
-                    while len(oes) < alvo:
-                        oes.append("Realizar exercícios de aplicação relacionados ao tema.")
-                    plano.objetivos_especificos = oes
-
-                # guardar rascunho em sessão para editar
-                st.session_state["draft_ctx"] = ctx
-                st.session_state["draft_plan"] = plano.model_dump()
-                st.session_state["draft_upload_name"] = upload_name
-                st.session_state["draft_upload_b64"] = upload_b64
-                st.session_state["draft_upload_type"] = upload_type
-                st.session_state["draft_modelo"] = modelo
-
-                st.success("Rascunho gerado. Pode editar abaixo e depois guardar.")
-                st.rerun()
-
-            except ValidationError as ve:
-                st.error("A resposta não respeitou o formato esperado (JSON/estrutura).")
-                st.code(str(ve))
-                st.code(raw_text if "raw_text" in locals() else "")
-            except Exception as e:
-                st.error(f"Erro ao gerar: {e}")
-
-    # Secção 2: editar e guardar (aparece só se houver rascunho)
-    if st.session_state.get("draft_ctx") and st.session_state.get("draft_plan"):
-        st.divider()
-        st.subheader("✍️ Editar rascunho")
-        ctx = st.session_state["draft_ctx"]
-        plan = st.session_state["draft_plan"]
-
-        # edição: objectivo geral
-        obj_geral = st.text_area("Objectivo geral", value=plan.get("objetivo_geral", ""), height=80, key="ed_obj_geral")
-
-        # edição: objectivos específicos
-        alvo = objetivos_alvo_por_duracao(ctx["duracao"])
-        oes = plan.get("objetivos_especificos", [])
-        # garantir tamanho
-        oes = list(oes)[:alvo] + ([""] * max(0, alvo - len(oes)))
-        st.markdown(f"**Objectivos específicos ({alvo})**")
-        edited_oes = []
-        for i in range(alvo):
-            edited_oes.append(st.text_input(f"{i+1}.", value=oes[i], key=f"ed_oe_{i}"))
-
-        # edição: tabela
-        tabela = plan.get("tabela", [])
-        # garantir 4 linhas
-        while len(tabela) < 4:
-            tabela.append(["", "", "", "", "", ""])
-        tabela = tabela[:4]
-        df_tab = pd.DataFrame(tabela, columns=TABLE_COLS)
-        st.markdown("**Tabela de actividades**")
-        df_edit = st.data_editor(df_tab, use_container_width=True, num_rows="fixed", key="ed_table")
-
-        # botões
-        c1, c2 = st.columns([0.6, 0.4])
-        with c1:
-            if st.button("Guardar plano e baixar PDF", type="primary", key="btn_guardar"):
-                enforce_user_limits_or_stop()
-
-                # regra: não repetir tema ao guardar (confere novamente)
-                if tema_ja_existe(user_key, ctx["tema"]):
-                    st.error("Já existe um plano guardado com este tema. Apague o plano anterior ou altere o tema.")
-                    st.stop()
-
-                # validações mínimas
-                if not obj_geral.strip():
-                    st.error("Preencha o objectivo geral.")
-                    st.stop()
-                if any(not x.strip() for x in edited_oes):
-                    st.error("Preencha todos os objectivos específicos.")
-                    st.stop()
-
-                # montar plano final
-                final_plan = {
-                    "objetivo_geral": obj_geral.strip(),
-                    "objetivos_especificos": [x.strip() for x in edited_oes],
-                    "tabela": df_edit.values.tolist(),
-                }
-
-                # valida com Pydantic
-                try:
-                    plano_obj = PlanoAula(**final_plan)
-                except ValidationError as ve:
-                    st.error("Há campos inválidos no rascunho (tabela/estrutura).")
-                    st.code(str(ve))
-                    st.stop()
-
-                # criar PDF
-                pdf_bytes = create_pdf(ctx, plano_obj)
-
-                # guardar no supabase
-                save_plan(
-                    user_key=user_key,
-                    ctx=ctx,
-                    plano_json={"ctx": ctx, "plano": plano_obj.model_dump(), "modelo": st.session_state.get("draft_modelo", "")},
-                    pdf_bytes=pdf_bytes,
-                    upload_name=st.session_state.get("draft_upload_name"),
-                    upload_b64=st.session_state.get("draft_upload_b64"),
-                    upload_type=st.session_state.get("draft_upload_type"),
-                    upload_details=ctx.get("upload_details"),
-                )
-
-                # limpar rascunho
-                for k in ["draft_ctx", "draft_plan", "draft_upload_name", "draft_upload_b64", "draft_upload_type", "draft_modelo"]:
-                    st.session_state.pop(k, None)
-
-                st.success("Plano guardado com sucesso.")
-                st.download_button(
-                    "⬇️ Baixar PDF",
-                    data=pdf_bytes,
-                    file_name=f"Plano_{ctx['disciplina']}_{ctx['classe']}_{ctx['tema']}.pdf".replace(" ", "_"),
-                    mime="application/pdf",
-                    type="primary",
-                    key="dl_after_save"
-                )
-                st.rerun()
-
-        with c2:
-            if st.button("Descartar rascunho", key="btn_descartar"):
-                for k in ["draft_ctx", "draft_plan", "draft_upload_name", "draft_upload_b64", "draft_upload_type", "draft_modelo"]:
-                    st.session_state.pop(k, None)
-                st.info("Rascunho descartado.")
-                st.rerun()
 
 
 # =========================
@@ -1219,10 +1175,6 @@ if is_admin:
 else:
     tabs = st.tabs(["📚 Meus Planos", "🧑‍🏫 Criar Plano"])
 
-
-# =========================
-# RENDER TABS
-# =========================
 if is_admin:
     with tabs[0]:
         render_admin_history()
